@@ -5131,10 +5131,50 @@ var bitstamp = {
         let result = this.parseTrades (response, market);
     },
 
-    async fetchOrder (id) {
-        throw new NotSupported (this.id + ' fetchOrder is not implemented yet');
-        await this.loadMarkets ();
+
+   parseOrder (order) {
+        let statusCode = order['status'];
+        let status = undefined;
+        if (statusCode == 'Queue' || statusCode == 'Open') {
+            status = 'open';
+        } else if (statusCode == "Finished") {
+            status = 'closed';
+        } else {
+            throw new ExchangeError("unknown order status")
+        }
+
+        let price = order.transactions.map(t=>t.price) / order.transactions.length ;
+        let timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2) );
+        let type = order.transactions.length > 0 ? order.transactions.map(t => ["deposit","withdrawal","market"][t["type"]])[0] : "unknown";
+
+        let result = {
+            'info': order,
+            'id': order['id'],
+            //'symbol': market['symbol'],
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'type': type,
+            //'side': order['type'],
+            'price': price,
+            //'amount': order['start_amount'],
+            //'remaining': order['amount'],
+            'status': status,
+        };
+        return result;
     },
+
+    async fetchOrder (id) {
+        await this.loadMarkets ();
+        let response = await this.privatePostOrderStatus ({id:id});
+        let order = response;
+        return this.parseOrder (this.extend ({ 'id': id }, order));
+    },
+
+
+    //async fetchOrder (id) {
+    //    throw new NotSupported (this.id + ' fetchOrder is not implemented yet');
+    //    await this.loadMarkets ();
+    //},
 
     async request (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
         let url = this.urls['api'] + '/' + this.version + '/' + this.implodeParams (path, params);
