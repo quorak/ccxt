@@ -73,6 +73,7 @@ class _1broker (Exchange):
             'rateLimit': 1500,
             'version': 'v2',
             'hasPublicAPI': False,
+            'hasCORS': True,
             'hasFetchOHLCV': True,
             'timeframes': {
                 '1m': '60',
@@ -347,10 +348,8 @@ class cryptocapital (Exchange):
         for c in range(0, len(self.currencies)):
             currency = self.currencies[c]
             account = self.account()
-            if currency in balance['available']:
-                account['free'] = float(balance['available'][currency])
-            if currency in balance['on_hold']:
-                account['used'] = float(balance['on_hold'][currency])
+            account['free'] = self.safe_float(balance['available'], currency, 0.0)
+            account['used'] = self.safe_float(balance['on_hold'], currency, 0.0)
             account['total'] = self.sum(account['free'], account['used'])
             result[currency] = account
         return result
@@ -445,7 +444,7 @@ class cryptocapital (Exchange):
             'id': result,
         }
 
-    async def cancel_order(self, id):
+    def cancel_order(self, id):
         return self.privatePostOrdersCancel({'id': id})
 
     async def withdraw(self, currency, amount, address, params={}):
@@ -484,7 +483,7 @@ class cryptocapital (Exchange):
                 errors.append(error['code'] + ': ' + error['message'])
             errors = ' '.join(errors)
             raise ExchangeError(self.id + ' ' + errors)
-        return self.fetch(url, method, headers, body)
+        return response
 
 #------------------------------------------------------------------------------
 
@@ -496,6 +495,7 @@ class _1btcxe (cryptocapital):
             'name': '1BTCXE',
             'countries': 'PA', # Panama
             'comment': 'Crypto Capital API',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766049-2b294408-5ecc-11e7-85cc-adaff013dc1a.jpg',
                 'api': 'https://1btcxe.com/api',
@@ -548,6 +548,7 @@ class acx (Exchange):
             'countries': 'AU',
             'rateLimit': 1000,
             'version': 'v2',
+            'hasCORS': True,
             'hasFetchTickers': True,
             'hasFetchOHLCV': True,
             'timeframes': {
@@ -816,10 +817,7 @@ class acx (Exchange):
                 url += '?' + suffix
             else:
                 body = suffix
-                headers = {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Content-Length': len(body),
-                }
+                headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         response = await self.fetch(url, method, headers, body)
         if 'error' in response:
             raise ExchangeError(self.id + ' ' + self.json(response))
@@ -836,6 +834,7 @@ class anxpro (Exchange):
             'countries': ['JP', 'SG', 'HK', 'NZ'],
             'version': '2',
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasWithdraw': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27765983-fd8595da-5ec9-11e7-82e3-adb3ab8c2612.jpg',
@@ -920,12 +919,8 @@ class anxpro (Exchange):
         ticker = response['data']
         t = int(ticker['dataUpdateTime'])
         timestamp = int(t / 1000)
-        bid = None
-        ask = None
-        if ticker['buy']['value']:
-            bid = float(ticker['buy']['value'])
-        if ticker['sell']['value']:
-            ask = float(ticker['sell']['value'])
+        bid = self.safe_float(ticker['buy'], 'value')
+        ask = self.safe_float(ticker['sell'], 'value')
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
@@ -996,10 +991,11 @@ class anxpro (Exchange):
             body = self.urlencode(self.extend({'nonce': nonce}, query))
             secret = base64.b64decode(self.secret)
             auth = request + "\0" + body
+            signature = self.hmac(self.encode(auth), secret, hashlib.sha512, 'base64')
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Rest-Key': self.apiKey,
-                'Rest-Sign': self.hmac(self.encode(auth), secret, hashlib.sha512, 'base64'),
+                'Rest-Sign': self.decode(signature),
             }
         response = await self.fetch(url, method, headers, body)
         if 'result' in response:
@@ -1018,6 +1014,7 @@ class binance (Exchange):
             'countries': 'CN', # China
             'rateLimit': 1000,
             'version': 'v1',
+            'hasCORS': False,
             'hasFetchOHLCV': True,
             'timeframes': {
                 '1m': '1m',
@@ -1041,6 +1038,7 @@ class binance (Exchange):
                 'api': 'https://www.binance.com/api',
                 'www': 'https://www.binance.com',
                 'doc': 'https://www.binance.com/restapipub.html',
+                'fees': 'https://binance.zendesk.com/hc/en-us/articles/115000429332',
             },
             'api': {
                 'public': {
@@ -1075,27 +1073,59 @@ class binance (Exchange):
                     ],
                 },
             },
+            'fees': {
+                'trading': {
+                    'taker': 0.001,
+                    'maker': 0.001,
+                },
+                'funding': {
+                    'withdraw': {
+                        'BNB': 1.0,
+                        'BTC': 0.0005,
+                        'ETH': 0.005,
+                        'LTC': 0.001,
+                        'NEO': 0.0,
+                        'QTUM': 0.1,
+                        'SNT': 1.0,
+                        'EOS': 0.1,
+                        'BCC': None,
+                        'GAS': 0.0,
+                        'USDT': 5.0,
+                        'HSR': 0.0001,
+                        'OAX': 0.1,
+                        'DNT': 1.0,
+                        'MCO': 0.1,
+                        'ICN': 0.1,
+                        'WTC': 0.1,
+                        'OMG': 0.1,
+                        'ZRX': 1.0,
+                        'STRAT': 0.1,
+                        'SNGLS': 1.0,
+                        'BQX': 1.0,
+                    },
+                },
+            },
             'markets': {
-                'BNB/BTC': {'id': 'BNBBTC', 'symbol': 'BNB/BTC', 'base': 'BNB', 'quote': 'BTC'},
-                'NEO/BTC': {'id': 'NEOBTC', 'symbol': 'NEO/BTC', 'base': 'NEO', 'quote': 'BTC'},
-                'ETH/BTC': {'id': 'ETHBTC', 'symbol': 'ETH/BTC', 'base': 'ETH', 'quote': 'BTC'},
-                'HSR/BTC': {'id': 'HSRBTC', 'symbol': 'HSR/BTC', 'base': 'HSR', 'quote': 'BTC'},
-                'LTC/BTC': {'id': 'LTCBTC', 'symbol': 'LTC/BTC', 'base': 'LTC', 'quote': 'BTC'},
-                'GAS/BTC': {'id': 'GASBTC', 'symbol': 'GAS/BTC', 'base': 'GAS', 'quote': 'BTC'},
-                'HCC/BTC': {'id': 'HCCBTC', 'symbol': 'HCC/BTC', 'base': 'HCC', 'quote': 'BTC'},
-                'BCH/BTC': {'id': 'BCCBTC', 'symbol': 'BCH/BTC', 'base': 'BCH', 'quote': 'BTC'},
-                'BNB/ETH': {'id': 'BNBETH', 'symbol': 'BNB/ETH', 'base': 'BNB', 'quote': 'ETH'},
-                'DNT/ETH': {'id': 'DNTETH', 'symbol': 'DNT/ETH', 'base': 'DNT', 'quote': 'ETH'},
-                'OAX/ETH': {'id': 'OAXETH', 'symbol': 'OAX/ETH', 'base': 'OAX', 'quote': 'ETH'},
-                'MCO/ETH': {'id': 'MCOETH', 'symbol': 'MCO/ETH', 'base': 'MCO', 'quote': 'ETH'},
-                'BTM/ETH': {'id': 'BTMETH', 'symbol': 'BTM/ETH', 'base': 'BTM', 'quote': 'ETH'},
-                'SNT/ETH': {'id': 'SNTETH', 'symbol': 'SNT/ETH', 'base': 'SNT', 'quote': 'ETH'},
-                'EOS/ETH': {'id': 'EOSETH', 'symbol': 'EOS/ETH', 'base': 'EOS', 'quote': 'ETH'},
-                'BNT/ETH': {'id': 'BNTETH', 'symbol': 'BNT/ETH', 'base': 'BNT', 'quote': 'ETH'},
-                'ICN/ETH': {'id': 'ICNETH', 'symbol': 'ICN/ETH', 'base': 'ICN', 'quote': 'ETH'},
-                'BTC/USDT': {'id': 'BTCUSDT', 'symbol': 'BTC/USDT', 'base': 'BTC', 'quote': 'USDT'},
-                'ETH/USDT': {'id': 'ETHUSDT', 'symbol': 'ETH/USDT', 'base': 'ETH', 'quote': 'USDT'},
-                'QTUM/ETH': {'id': 'QTUMETH', 'symbol': 'QTUM/ETH', 'base': 'QTUM', 'quote': 'ETH'},
+                'BNB/BTC': {'id': 'BNBBTC', 'symbol': 'BNB/BTC', 'base': 'BNB', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'NEO/BTC': {'id': 'NEOBTC', 'symbol': 'NEO/BTC', 'base': 'NEO', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'ETH/BTC': {'id': 'ETHBTC', 'symbol': 'ETH/BTC', 'base': 'ETH', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'HSR/BTC': {'id': 'HSRBTC', 'symbol': 'HSR/BTC', 'base': 'HSR', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'LTC/BTC': {'id': 'LTCBTC', 'symbol': 'LTC/BTC', 'base': 'LTC', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'GAS/BTC': {'id': 'GASBTC', 'symbol': 'GAS/BTC', 'base': 'GAS', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'HCC/BTC': {'id': 'HCCBTC', 'symbol': 'HCC/BTC', 'base': 'HCC', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'BCH/BTC': {'id': 'BCCBTC', 'symbol': 'BCH/BTC', 'base': 'BCH', 'quote': 'BTC', 'taker': 0.001, 'maker': 0.001},
+                'BNB/ETH': {'id': 'BNBETH', 'symbol': 'BNB/ETH', 'base': 'BNB', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'DNT/ETH': {'id': 'DNTETH', 'symbol': 'DNT/ETH', 'base': 'DNT', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'OAX/ETH': {'id': 'OAXETH', 'symbol': 'OAX/ETH', 'base': 'OAX', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'MCO/ETH': {'id': 'MCOETH', 'symbol': 'MCO/ETH', 'base': 'MCO', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'BTM/ETH': {'id': 'BTMETH', 'symbol': 'BTM/ETH', 'base': 'BTM', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'SNT/ETH': {'id': 'SNTETH', 'symbol': 'SNT/ETH', 'base': 'SNT', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'EOS/ETH': {'id': 'EOSETH', 'symbol': 'EOS/ETH', 'base': 'EOS', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'BNT/ETH': {'id': 'BNTETH', 'symbol': 'BNT/ETH', 'base': 'BNT', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'ICN/ETH': {'id': 'ICNETH', 'symbol': 'ICN/ETH', 'base': 'ICN', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
+                'BTC/USDT': {'id': 'BTCUSDT', 'symbol': 'BTC/USDT', 'base': 'BTC', 'quote': 'USDT', 'taker': 0.001, 'maker': 0.001},
+                'ETH/USDT': {'id': 'ETHUSDT', 'symbol': 'ETH/USDT', 'base': 'ETH', 'quote': 'USDT', 'taker': 0.001, 'maker': 0.001},
+                'QTUM/ETH': {'id': 'QTUMETH', 'symbol': 'QTUM/ETH', 'base': 'QTUM', 'quote': 'ETH', 'taker': 0.001, 'maker': 0.001},
             },
         }
         params.update(config)
@@ -1244,12 +1274,8 @@ class binance (Exchange):
                 symbol = market['symbol']
         timestamp = order['time']
         amount = float(order['origQty'])
-        remaining = None
-        filled = None
-        if 'executedQty' in order:
-            if order['executedQty']:
-                filled = float(order['executedQty'])
-                remaining = amount - filled
+        filled = self.safe_float(order, 'executedQty', 0.0)
+        remaining = max(amount - filled, 0.0)
         result = {
             'info': order,
             'id': order['orderId'],
@@ -1360,6 +1386,7 @@ class bit2c (Exchange):
             'name': 'Bit2C',
             'countries': 'IL', # Israel
             'rateLimit': 3000,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766119-3593220e-5ece-11e7-8b3a-5a041f6bcc3f.jpg',
                 'api': 'https://www.bit2c.co.il',
@@ -1502,11 +1529,11 @@ class bit2c (Exchange):
             nonce = self.nonce()
             query = self.extend({'nonce': nonce}, params)
             body = self.urlencode(query)
+            signature = self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512, 'base64')
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'key': self.apiKey,
-                'sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512, 'base64'),
+                'sign': self.decode(signature),
             }
         return self.fetch(url, method, headers, body)
 
@@ -1520,6 +1547,7 @@ class bitbay (Exchange):
             'name': 'BitBay',
             'countries': ['PL', 'EU'], # Poland
             'rateLimit': 1000,
+            'hasCORS': True,
             'hasWithdraw': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766132-978a7bd8-5ece-11e7-9540-bc96d1e9bbb8.jpg',
@@ -1659,11 +1687,12 @@ class bitbay (Exchange):
         return self.privatePostCancel({'id': id})
 
     def isFiat(self, currency):
-        if currency == 'USD':
-            return True
-        if currency == 'EUR':
-            return True
-        if currency == 'PLN':
+        fiatCurrencies = {
+            'USD': True,
+            'EUR': True,
+            'PLN': True,
+        }
+        if currency in fiatCurrencies:
             return True
         return False
 
@@ -1699,7 +1728,6 @@ class bitbay (Exchange):
             }, params))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'API-Key': self.apiKey,
                 'API-Hash': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512),
             }
@@ -1714,6 +1742,7 @@ class bitcoincoid (Exchange):
             'id': 'bitcoincoid',
             'name': 'Bitcoin.co.id',
             'countries': 'ID', # Indonesia
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766138-043c7786-5ecf-11e7-882b-809c14f38b53.jpg',
                 'api': {
@@ -1763,17 +1792,14 @@ class bitcoincoid (Exchange):
 
     async def fetch_balance(self, params={}):
         response = await self.privatePostGetInfo()
-        balance = response['return']['balance']
-        frozen = response['return']['balance_hold']
+        balance = response['return']
         result = {'info': balance}
         for c in range(0, len(self.currencies)):
             currency = self.currencies[c]
             lowercase = currency.lower()
             account = self.account()
-            if lowercase in balance:
-                account['free'] = float(balance[lowercase])
-            if lowercase in frozen:
-                account['used'] = float(frozen[lowercase])
+            account['free'] = self.safe_float(balance['balance'], lowercase, 0.0)
+            account['used'] = self.safe_float(balance['balance_hold'], lowercase, 0.0)
             account['total'] = self.sum(account['free'], account['used'])
             result[currency] = account
         return result
@@ -1865,7 +1891,6 @@ class bitcoincoid (Exchange):
             }, params))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Key': self.apiKey,
                 'Sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512),
             }
@@ -1885,6 +1910,7 @@ class bitfinex (Exchange):
             'countries': 'US',
             'version': 'v1',
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchTickers': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766244-e328a50c-5ed2-11e7-947b-041416579bb3.jpg',
@@ -2208,6 +2234,7 @@ class bitfinex2 (bitfinex):
             'name': 'Bitfinex v2',
             'countries': 'US',
             'version': 'v2',
+            'hasCORS': True,
             'hasFetchTickers': False, # True but at least one pair is required
             'hasFetchOHLCV': True,
             'timeframes': {
@@ -2485,6 +2512,7 @@ class bitflyer (Exchange):
             'countries': 'JP',
             'version': 'v1',
             'rateLimit': 500,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28051642-56154182-660e-11e7-9b0d-6042d1e6edd8.jpg',
                 'api': 'https://api.bitflyer.jp',
@@ -2547,10 +2575,16 @@ class bitflyer (Exchange):
             quote = None
             symbol = id
             numCurrencies = len(currencies)
-            if numCurrencies == 2:
+            if numCurrencies == 1:
+                base = symbol[0:3]
+                quote = symbol[3:6]
+            elif numCurrencies == 2:
                 base = currencies[0]
                 quote = currencies[1]
                 symbol = base + '/' + quote
+            else:
+                base = currencies[1]
+                quote = currencies[2]
             result.append({
                 'id': id,
                 'symbol': symbol,
@@ -2676,7 +2710,7 @@ class bitflyer (Exchange):
             'id': response['message_id'],
         }
 
-    async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
+    def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
         request = '/' + self.version + '/'
         if api == 'private':
             request += 'me/'
@@ -2699,6 +2733,214 @@ class bitflyer (Exchange):
 
 #------------------------------------------------------------------------------
 
+class bithumb (Exchange):
+
+    def __init__(self, config={}):
+        params = {
+            'id': 'bithumb',
+            'name': 'Bithumb',
+            'countries': 'KR', # South Korea
+            'rateLimit': 500,
+            'hasCORS': True,
+            'hasFetchTickers': True,
+            'urls': {
+                'logo': 'https://user-images.githubusercontent.com/1294454/30597177-ea800172-9d5e-11e7-804c-b9d4fa9b56b0.jpg',
+                'api': {
+                    'public': 'https://api.bithumb.com/public',
+                    'private': 'https://api.bithumb.com',
+                },
+                'www': 'https://www.bithumb.com',
+                'doc': 'https://www.bithumb.com/u1/US127',
+            },
+            'api': {
+                'public': {
+                    'get': [
+                        'ticker/{currency}',
+                        'ticker/all',
+                        'orderbook/{currency}',
+                        'orderbook/all',
+                        'recent_transactions/{currency}',
+                        'recent_transactions/all',
+                    ],
+                },
+                'private': {
+                    'post': [
+                        'info/account',
+                        'info/balance',
+                        'info/wallet_address',
+                        'info/ticker',
+                        'info/orders',
+                        'info/user_transactions',
+                        'trade/place',
+                        'info/order_detail',
+                        'trade/cancel',
+                        'trade/btc_withdrawal',
+                        'trade/krw_deposit',
+                        'trade/krw_withdrawal',
+                        'trade/market_buy',
+                        'trade/market_sell',
+                    ],
+                },
+            },
+            'markets': {
+                'BTC/KRW': {'id': 'BTC', 'symbol': 'BTC/KRW', 'base': 'BTC', 'quote': 'KRW'},
+                'ETH/KRW': {'id': 'ETH', 'symbol': 'ETH/KRW', 'base': 'ETH', 'quote': 'KRW'},
+                'LTC/KRW': {'id': 'LTC', 'symbol': 'LTC/KRW', 'base': 'LTC', 'quote': 'KRW'},
+                'ETC/KRW': {'id': 'ETC', 'symbol': 'ETC/KRW', 'base': 'ETC', 'quote': 'KRW'},
+                'XRP/KRW': {'id': 'XRP', 'symbol': 'XRP/KRW', 'base': 'XRP', 'quote': 'KRW'},
+                'BCH/KRW': {'id': 'BCH', 'symbol': 'BCH/KRW', 'base': 'BCH', 'quote': 'KRW'},
+                'XMR/KRW': {'id': 'XMR', 'symbol': 'XMR/KRW', 'base': 'XMR', 'quote': 'KRW'},
+                'DASH/KRW': {'id': 'DASH', 'symbol': 'DASH/KRW', 'base': 'DASH', 'quote': 'KRW'},
+            },
+        }
+        params.update(config)
+        super(bithumb, self).__init__(params)
+
+    def fetch_balance(self, params={}):
+        raise NotSupported(self.id + ' fetchBalance not implemented yet')
+        # await self.load_markets()
+        # response = await self.privatePostUserInfo()
+        # result = {'info': response}
+        # for c in range(0, len(self.currencies)):
+        #     currency = self.currencies[c]
+        #     account = self.account()
+        #     if currency in response['balances']:
+        #         account['free'] = float(response['balances'][currency])
+        #     if currency in response['reserved']:
+        #         account['used'] = float(response['reserved'][currency])
+        #     account['total'] = self.sum(account['free'], account['used'])
+        #     result[currency] = account
+        #}
+        # return result
+
+    async def fetch_order_book(self, symbol, params={}):
+        market = self.market(symbol)
+        response = await self.publicGetOrderbookCurrency(self.extend({
+            'count': 50, # max = 50
+            'currency': market['base'],
+        }, params))
+        orderbook = response['data']
+        timestamp = int(orderbook['timestamp'])
+        return self.parse_order_book(orderbook, timestamp, 'bids', 'asks', 'price', 'quantity')
+
+    def parse_ticker(self, ticker, market):
+        timestamp = int(ticker['date'])
+        return {
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'high': self.safe_float(ticker, 'max_price'),
+            'low': self.safe_float(ticker, 'min_price'),
+            'bid': self.safe_float(ticker, 'buy_price'),
+            'ask': self.safe_float(ticker, 'sell_price'),
+            'vwap': None,
+            'open': self.safe_float(ticker, 'opening_price'),
+            'close': self.safe_float(ticker, 'closing_price'),
+            'first': None,
+            'last': self.safe_float(ticker, 'last_trade'),
+            'change': None,
+            'percentage': None,
+            'average': self.safe_float(ticker, 'average_price'),
+            'baseVolume': None,
+            'quoteVolume': self.safe_float(ticker, 'volume_1day'),
+            'info': ticker,
+        }
+
+    async def fetch_tickers(self, currency='BTC'):
+        response = await self.publicGetTickerAll()
+        result = {}
+        timestamp = response['data']['date']
+        tickers = self.omit(response['data'], 'date')
+        ids = list(tickers.keys())
+        for i in range(0, len(ids)):
+            id = ids[i]
+            market = self.markets_by_id[id]
+            symbol = market['symbol']
+            ticker = tickers[id]
+            ticker['date'] = timestamp
+            result[symbol] = self.parse_ticker(ticker, market)
+        return result
+
+    async def fetch_ticker(self, symbol):
+        market = self.market(symbol)
+        response = await self.publicGetTickerCurrency({
+            'currency': market['base'],
+        })
+        return self.parse_ticker(response['data'], market)
+
+    def parse_trade(self, trade, market):
+        # a workaround their bug in date format, hours are not 0-padded
+        transaction_date, transaction_time = trade['transaction_date'].split(' ')
+        transaction_time_short = len(transaction_time) < 8
+        if transaction_time_short:
+            transaction_time = '0' + transaction_time
+        timestamp = self.parse8601(transaction_date + ' ' + transaction_time)
+        side = 'sell' if(trade['type'] == 'ask') else 'buy'
+        return {
+            'id': None,
+            'info': trade,
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'symbol': market['symbol'],
+            'order': None,
+            'type': None,
+            'side': side,
+            'price': float(trade['price']),
+            'amount': float(trade['units_traded']),
+        }
+
+    async def fetch_trades(self, symbol, params={}):
+        market = self.market(symbol)
+        response = await self.publicGetRecentTransactionsCurrency(self.extend({
+            'currency': market['base'],
+            'count': 100, # max = 100
+        }, params))
+        return self.parse_trades(response['data'], market)
+
+    def create_order(self, symbol, type, side, amount, price=None, params={}):
+        raise NotSupported(self.id + ' private API not implemented yet')
+        # prefix = ''
+        # if type == 'market':
+        #     prefix = 'market_'
+        # order = {
+        #     'pair': self.market_id(symbol),
+        #     'quantity': amount,
+        #     'price': price or 0,
+        #     'type': prefix + side,
+        #}
+        # response = await self.privatePostOrderCreate(self.extend(order, params))
+        # return {
+        #     'info': response,
+        #     'id': str(response['order_id']),
+        #}
+
+    def cancel_order(self, id):
+        raise NotSupported(self.id + ' private API not implemented yet')
+        # return await self.privatePostOrderCancel({'order_id': id})
+
+    async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
+        url = self.urls['api'][api] + '/' + self.implode_params(path, params)
+        query = self.omit(params, self.extract_params(path))
+        if api == 'public':
+            if query:
+                url += '?' + self.urlencode(query)
+        else:
+            raise NotSupported(self.id + ' private API not implemented yet')
+            # nonce = self.nonce()
+            # body = self.urlencode(self.extend({'nonce': nonce}, params))
+            # headers = {
+            #     'Content-Type': 'application/x-www-form-urlencoded',
+            #     'Key': self.apiKey,
+            #     'Sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512),
+            #}
+        response = await self.fetch(url, method, headers, body)
+        if 'status' in response:
+            if response['status'] == '0000':
+                return response
+            raise ExchangeError(self.id + ' ' + self.json(response))
+        return response
+
+#------------------------------------------------------------------------------
+
 class bitlish (Exchange):
 
     def __init__(self, config={}):
@@ -2708,6 +2950,7 @@ class bitlish (Exchange):
             'countries': ['GB', 'EU', 'RU'],
             'rateLimit': 1500,
             'version': 'v1',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'hasFetchOHLCV': True,
             'urls': {
@@ -2839,7 +3082,7 @@ class bitlish (Exchange):
         now = self.seconds()
         start = now - 86400 * 30 # last 30 days
         interval = [str(start), None]
-        return self.publicPostOhlcv(self.extend({
+        return await self.publicPostOhlcv(self.extend({
             'time_range': interval,
         }, params))
 
@@ -2923,7 +3166,7 @@ class bitlish (Exchange):
 
     async def cancel_order(self, id):
         await self.load_markets()
-        return self.privatePostCancelTrade({'id': id})
+        return await self.privatePostCancelTrade({'id': id})
 
     async def withdraw(self, currency, amount, address, params={}):
         await self.load_markets()
@@ -2965,6 +3208,7 @@ class bitmarket (Exchange):
             'name': 'BitMarket',
             'countries': ['PL', 'EU'],
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchOHLCV': True,
             'hasWithdraw': True,
             'timeframes': {
@@ -3237,6 +3481,7 @@ class bitmex (Exchange):
             'countries': 'SC', # Seychelles
             'version': 'v1',
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchOHLCV': True,
             'timeframes': {
                 '1m': '1m',
@@ -3348,7 +3593,6 @@ class bitmex (Exchange):
         result = []
         for p in range(0, len(markets)):
             market = markets[p]
-            print(market)
             id = market['symbol']
             base = market['underlying']
             quote = market['quoteCurrency']
@@ -3580,6 +3824,7 @@ class bitso (Exchange):
             'countries': 'MX', # Mexico
             'rateLimit': 2000, # 30 requests per minute
             'version': 'v3',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766335-715ce7aa-5ed5-11e7-88a8-173a27bb30fe.jpg',
                 'api': 'https://api.bitso.com',
@@ -3785,6 +4030,7 @@ class bitstamp1 (Exchange):
             'countries': 'GB',
             'rateLimit': 1000,
             'version': 'v1',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27786377-8c8ab57e-5fe9-11e7-8ea4-2b05b6bcceec.jpg',
                 'api': 'https://www.bitstamp.net/api',
@@ -3916,12 +4162,9 @@ class bitstamp1 (Exchange):
             free = lowercase + '_available'
             used = lowercase + '_reserved'
             account = self.account()
-            if free in balance:
-                account['free'] = float(balance[free])
-            if used in balance:
-                account['used'] = float(balance[used])
-            if total in balance:
-                account['total'] = float(balance[total])
+            account['free'] = self.safe_float(balance, free, 0.0)
+            account['used'] = self.safe_float(balance, used, 0.0)
+            account['total'] = self.safe_float(balance, total, 0.0)
             result[currency] = account
         return result
 
@@ -3989,7 +4232,6 @@ class bitstamp1 (Exchange):
             body = self.urlencode(query)
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': str(len(body)),
             }
         response = await self.fetch(url, method, headers, body)
         if 'status' in response:
@@ -4008,6 +4250,7 @@ class bitstamp (Exchange):
             'countries': 'GB',
             'rateLimit': 1000,
             'version': 'v2',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27786377-8c8ab57e-5fe9-11e7-8ea4-2b05b6bcceec.jpg',
                 'api': 'https://www.bitstamp.net/api',
@@ -4222,7 +4465,6 @@ class bitstamp (Exchange):
             body = self.urlencode(query)
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': str(len(body)),
             }
         response = await self.fetch(url, method, headers, body)
         if 'status' in response:
@@ -4241,6 +4483,7 @@ class bittrex (Exchange):
             'countries': 'US',
             'version': 'v1.1',
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchTickers': True,
             'hasFetchOHLCV': True,
             'hasFetchOrders': True,
@@ -4264,6 +4507,10 @@ class bittrex (Exchange):
                 'doc': [
                     'https://bittrex.com/Home/Api',
                     'https://www.npmjs.org/package/node.bittrex.api',
+                ],
+                'fees': [
+                    'https://bittrex.com/Fees',
+                    'https://support.bittrex.com/hc/en-us/articles/115000199651-What-fees-does-Bittrex-charge-',
                 ],
             },
             'api': {
@@ -4310,6 +4557,12 @@ class bittrex (Exchange):
                     ],
                 },
             },
+            'fees': {
+                'trading': {
+                    'maker': 0.0025,
+                    'taker': 0.0025,
+                },
+            },
         }
         params.update(config)
         super(bittrex, self).__init__(params)
@@ -4325,13 +4578,13 @@ class bittrex (Exchange):
             base = self.commonCurrencyCode(base)
             quote = self.commonCurrencyCode(quote)
             symbol = base + '/' + quote
-            result.append({
+            result.append(self.extend(self.fees['trading'], {
                 'id': id,
                 'symbol': symbol,
                 'base': base,
                 'quote': quote,
                 'info': market,
-            })
+            }))
         return result
 
     async def fetch_balance(self, params={}):
@@ -4493,7 +4746,7 @@ class bittrex (Exchange):
 
     async def cancel_order(self, id):
         await self.load_markets()
-        return self.marketGetCancel({'uuid': id})
+        return await self.marketGetCancel({'uuid': id})
 
     def parse_order(self, order, market=None):
         side = None
@@ -4771,6 +5024,7 @@ class bl3p (Exchange):
             'rateLimit': 1000,
             'version': '1',
             'comment': 'An exchange market by BitonicNL',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28501752-60c21b82-6feb-11e7-818b-055ee6d0e754.jpg',
                 'api': 'https://api.bl3p.eu',
@@ -4916,7 +5170,7 @@ class bl3p (Exchange):
     async def cancel_order(self, id):
         return self.privatePostMarketMoneyOrderCancel({'order_id': id})
 
-    async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
+    def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
         request = self.implode_params(path, params)
         url = self.urls['api'] + '/' + self.version + '/' + request
         query = self.omit(params, self.extract_params(path))
@@ -4931,7 +5185,6 @@ class bl3p (Exchange):
             signature = self.hmac(self.encode(auth), secret, hashlib.sha512, 'base64')
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Rest-Key': self.apiKey,
                 'Rest-Sign': signature,
             }
@@ -4948,6 +5201,7 @@ class bleutrade (bittrex):
             'countries': 'BR', # Brazil
             'rateLimit': 1000,
             'version': 'v2',
+            'hasCORS': True,
             'hasFetchTickers': True,
             'hasFetchOHLCV': False,
             'urls': {
@@ -4985,6 +5239,7 @@ class btcchina (Exchange):
             'countries': 'CN',
             'rateLimit': 1500,
             'version': 'v1',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766368-465b3286-5ed6-11e7-9a11-0f6467e1d82b.jpg',
                 'api': {
@@ -5274,7 +5529,6 @@ class btcchina (Exchange):
             signature = self.hmac(self.encode(query), self.encode(self.secret), hashlib.sha1)
             auth = self.apiKey + ':' + signature
             headers = {
-                'Content-Length': len(body),
                 'Authorization': 'Basic ' + base64.b64encode(auth),
                 'Json-Rpc-Tonce': nonce,
             }
@@ -5293,6 +5547,7 @@ class btcmarkets (Exchange):
             'name': 'BTC Markets',
             'countries': 'AU', # Australia
             'rateLimit': 1000, # market data cached for 1 second (trades cached for 2 seconds)
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/29142911-0e1acfc2-7d5c-11e7-98c4-07d9532b29d7.jpg',
                 'api': 'https://api.btcmarkets.net',
@@ -5472,11 +5727,10 @@ class btcmarkets (Exchange):
             }
             if method == 'POST':
                 body = self.urlencode(query)
-                headers['Content-Length'] = len(body)
                 auth += body
             secret = base64.b64decode(self.secret)
             signature = self.hmac(self.encode(auth), secret, hashlib.sha512, 'base64')
-            headers['signature'] = signature
+            headers['signature'] = self.decode(signature)
         response = await self.fetch(url, method, headers, body)
         if api == 'private':
             if 'success' in response:
@@ -5659,7 +5913,6 @@ class btctrader (Exchange):
                 'X-Stamp': str(nonce),
                 'X-Signature': self.hmac(self.encode(auth), secret, hashlib.sha256, 'base64'),
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
             }
         return self.fetch(url, method, headers, body)
 
@@ -5673,6 +5926,7 @@ class btcexchange (btctrader):
             'name': 'BTCExchange',
             'countries': 'PH', # Philippines
             'rateLimit': 1500,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27993052-4c92911a-64aa-11e7-96d8-ec6ac3435757.jpg',
                 'api': 'https://www.btcexchange.ph/api',
@@ -5696,6 +5950,7 @@ class btctradeua (Exchange):
             'name': 'BTC Trade UA',
             'countries': 'UA', # Ukraine,
             'rateLimit': 3000,
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27941483-79fc7350-62d9-11e7-9f61-ac47f28fcd96.jpg',
                 'api': 'https://btc-trade.com.ua/api',
@@ -5882,7 +6137,6 @@ class btctradeua (Exchange):
                 'public-key': self.apiKey,
                 'api-sign': self.hash(self.encode(auth), 'sha256'),
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
             }
         return self.fetch(url, method, headers, body)
 
@@ -5896,6 +6150,7 @@ class btcturk (btctrader):
             'name': 'BTCTurk',
             'countries': 'TR', # Turkey
             'rateLimit': 1000,
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27992709-18e15646-64a3-11e7-9fa2-b0950ec7712f.jpg',
                 'api': 'https://www.btcturk.com/api',
@@ -5920,6 +6175,7 @@ class btcx (Exchange):
             'countries': ['IS', 'US', 'EU'],
             'rateLimit': 1500, # support in english is very poor, unable to tell rate limits
             'version': 'v1',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766385-9fdcc98c-5ed6-11e7-8f14-66d5e5cd47e6.jpg',
                 'api': 'https://btc-x.is/api',
@@ -6070,6 +6326,7 @@ class bter (Exchange):
             'name': 'Bter',
             'countries': ['VG', 'CN'], # British Virgin Islands, China
             'version': '2',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27980479-cfa3188c-6387-11e7-8191-93fc4184ba5c.jpg',
@@ -6273,7 +6530,6 @@ class bter (Exchange):
                 'Key': self.apiKey,
                 'Sign': signature,
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': str(len(body)),
             }
         response = await self.fetch(url, method, headers, body)
         if 'result' in response:
@@ -6291,6 +6547,7 @@ class bxinth (Exchange):
             'name': 'BX.in.th',
             'countries': 'TH', # Thailand
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766412-567b1eb4-5ed7-11e7-94a8-ff6a3884f6c5.jpg',
@@ -6498,7 +6755,6 @@ class bxinth (Exchange):
             }, params))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
             }
         response = await self.fetch(url, method, headers, body)
         if api == 'public':
@@ -6518,6 +6774,7 @@ class ccex (Exchange):
             'name': 'C-CEX',
             'countries': ['DE', 'EU'],
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766433-16881f90-5ed8-11e7-92f8-3d92cc747a6c.jpg',
@@ -6612,9 +6869,6 @@ class ccex (Exchange):
 
     def parse_ticker(self, ticker, market=None):
         timestamp = ticker['updated'] * 1000
-        volume = None
-        if 'buysupport' in ticker:
-            volume = float(ticker['buysupport'])
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
@@ -6631,7 +6885,7 @@ class ccex (Exchange):
             'percentage': None,
             'average': float(ticker['avg']),
             'baseVolume': None,
-            'quoteVolume': volume,
+            'quoteVolume': self.safe_float(ticker, 'buysupport'),
             'info': ticker,
         }
 
@@ -6741,6 +6995,7 @@ class cex (Exchange):
             'name': 'CEX.IO',
             'countries': ['GB', 'EU', 'CY', 'RU'],
             'rateLimit': 1500,
+            'hasCORS': True,
             'hasFetchTickers': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766442-8ddc33b0-5ed8-11e7-8b98-f786aef0f3c9.jpg',
@@ -6837,22 +7092,12 @@ class cex (Exchange):
         if 'timestamp' in ticker:
             timestamp = int(ticker['timestamp']) * 1000
             iso8601 = self.iso8601(timestamp)
-        volume = None
-        if 'volume' in ticker:
-            volume = float(ticker['volume'])
-        else:
-            raise ExchangeError(self.id + ' unrecognized ticker ' + self.json(ticker))
-        high = None
-        low = None
-        bid = None
-        ask = None
-        last = None
-        if volume > 0:
-            high = float(ticker['high'])
-            low = float(ticker['low'])
-            bid = float(ticker['bid'])
-            ask = float(ticker['ask'])
-            last = float(ticker['last'])
+        volume = self.safe_float(ticker, 'volume')
+        high = self.safe_float(ticker, 'high')
+        low = self.safe_float(ticker, 'low')
+        bid = self.safe_float(ticker, 'bid')
+        ask = self.safe_float(ticker, 'ask')
+        last = self.safe_float(ticker, 'last')
         return {
             'timestamp': timestamp,
             'datetime': iso8601,
@@ -6958,7 +7203,6 @@ class cex (Exchange):
             }, query))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
             }
         response = await self.fetch(url, method, headers, body)
         if 'e' in response:
@@ -6979,6 +7223,7 @@ class chbtc (Exchange):
             'countries': 'CN',
             'rateLimit': 1000,
             'version': 'v1',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28555659-f0040dc2-7109-11e7-9d99-688a438bf9f4.jpg',
                 'api': {
@@ -7178,6 +7423,7 @@ class chilebit (blinktrade):
             'id': 'chilebit',
             'name': 'ChileBit',
             'countries': 'CL',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27991414-1298f0d8-647f-11e7-9c40-d56409266336.jpg',
                 'api': {
@@ -7205,6 +7451,7 @@ class coincheck (Exchange):
             'name': 'coincheck',
             'countries': ['JP', 'ID'],
             'rateLimit': 1500,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766464-3b5c3c74-5ed9-11e7-840e-31b32968e1da.jpg',
                 'api': 'https://coincheck.com/api',
@@ -7384,7 +7631,6 @@ class coincheck (Exchange):
             auth = nonce + url + (body or '')
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': length,
                 'ACCESS-KEY': self.apiKey,
                 'ACCESS-NONCE': nonce,
                 'ACCESS-SIGNATURE': self.hmac(self.encode(auth), self.encode(self.secret)),
@@ -7407,6 +7653,7 @@ class coinfloor (Exchange):
             'name': 'coinfloor',
             'rateLimit': 1000,
             'countries': 'UK',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28246081-623fc164-6a1c-11e7-913f-bac0d5576c90.jpg',
                 'api': 'https://webapi.coinfloor.co.uk:8090/bist',
@@ -7471,11 +7718,6 @@ class coinfloor (Exchange):
     def parse_ticker(self, ticker, market):
         # rewrite to get the timestamp from HTTP headers
         timestamp = self.milliseconds()
-        # they sometimes return null for vwap
-        vwap = None
-        if 'vwap' in ticker:
-            if ticker['vwap']:
-                vwap = float(ticker['vwap'])
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
@@ -7483,7 +7725,7 @@ class coinfloor (Exchange):
             'low': float(ticker['low']),
             'bid': float(ticker['bid']),
             'ask': float(ticker['ask']),
-            'vwap': vwap,
+            'vwap': self.safe_float(ticker, 'vwap'),
             'open': None,
             'close': None,
             'first': None,
@@ -7553,7 +7795,6 @@ class coinfloor (Exchange):
             signature = base64.b64encode(auth)
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Authorization': 'Basic ' + signature,
             }
         return self.fetch(url, method, headers, body)
@@ -7569,6 +7810,7 @@ class coingi (Exchange):
             'rateLimit': 1000,
             'countries': ['PA', 'BG', 'CN', 'US'], # Panama, Bulgaria, China, US
             'hasFetchTickers': True,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28619707-5c9232a8-7212-11e7-86d6-98fe5d15cc6e.jpg',
                 'api': 'https://api.coingi.com',
@@ -7734,7 +7976,6 @@ class coingi (Exchange):
             body = self.json(request)
             headers = {
                 'Content-Type': 'application/json',
-                'Content-Length': len(body),
             }
         response = await self.fetch(url, method, headers, body)
         if 'errors' in response:
@@ -7752,6 +7993,7 @@ class coinmarketcap (Exchange):
             'rateLimit': 10000,
             'version': 'v1',
             'countries': 'US',
+            'hasCORS': True,
             'hasPrivateAPI': False,
             'hasFetchTickers': True,
             'urls': {
@@ -7904,6 +8146,7 @@ class coinmate (Exchange):
             'name': 'CoinMate',
             'countries': ['GB', 'CZ'], # UK, Czech Republic
             'rateLimit': 1000,
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27811229-c1efb510-606c-11e7-9a36-84ba2ce412d8.jpg',
                 'api': 'https://coinmate.io/api',
@@ -8082,6 +8325,7 @@ class coinsecure (Exchange):
             'countries': 'IN', # India
             'rateLimit': 1000,
             'version': 'v1',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766472-9cbd200a-5ed9-11e7-9551-2267ad7bac08.jpg',
                 'api': 'https://api.coinsecure.in',
@@ -8279,7 +8523,7 @@ class coinsecure (Exchange):
             'info': ticker,
         }
 
-    async def fetch_trades(self, market, params={}):
+    def fetch_trades(self, market, params={}):
         return self.publicGetExchangeTrades(params)
 
     async def create_order(self, market, type, side, amount, price=None, params={}):
@@ -8302,7 +8546,7 @@ class coinsecure (Exchange):
             'id': response['message']['orderID'],
         }
 
-    async def cancel_order(self, id):
+    def cancel_order(self, id):
         raise ExchangeError(self.id + ' cancelOrder() is not fully implemented yet')
         method = 'privateDeleteUserExchangeAskCancelOrderId' # TODO fixme, have to specify order side here
         return getattr(self, method)({'orderID': id})
@@ -8331,6 +8575,7 @@ class coinspot (Exchange):
             'name': 'CoinSpot',
             'countries': 'AU', # Australia
             'rateLimit': 1000,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28208429-3cacdf9a-6896-11e7-854e-4c79a772a30f.jpg',
                 'api': {
@@ -8428,12 +8673,12 @@ class coinspot (Exchange):
             'info': ticker,
         }
 
-    async def fetch_trades(self, market, params={}):
+    def fetch_trades(self, market, params={}):
         return self.privatePostOrdersHistory(self.extend({
             'cointype': self.market_id(market),
         }, params))
 
-    async def create_order(self, market, type, side, amount, price=None, params={}):
+    def create_order(self, market, type, side, amount, price=None, params={}):
         method = 'privatePostMy' + self.capitalize(side)
         if type == 'market':
             raise ExchangeError(self.id + ' allows limit orders only')
@@ -8444,12 +8689,12 @@ class coinspot (Exchange):
         }
         return getattr(self, method)(self.extend(order, params))
 
-    async def cancel_order(self, id, params={}):
+    def cancel_order(self, id, params={}):
         raise ExchangeError(self.id + ' cancelOrder() is not fully implemented yet')
         method = 'privatePostMyBuy'
         return getattr(self, method)({'id': id})
 
-    async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
+    def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
         if not self.apiKey:
             raise AuthenticationError(self.id + ' requires apiKey for all requests')
         url = self.urls['api'][api] + '/' + path
@@ -8458,7 +8703,6 @@ class coinspot (Exchange):
             body = self.json(self.extend({'nonce': nonce}, params))
             headers = {
                 'Content-Type': 'application/json',
-                'Content-Length': len(body),
                 'key': self.apiKey,
                 'sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512),
             }
@@ -8475,6 +8719,7 @@ class cryptopia (Exchange):
             'rateLimit': 1500,
             'countries': 'NZ', # New Zealand
             'hasFetchTickers': True,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/29484394-7b4ea6e2-84c6-11e7-83e5-1fccf4b2dc81.jpg',
                 'api': 'https://www.cryptopia.co.nz/api',
@@ -8522,12 +8767,12 @@ class cryptopia (Exchange):
         super(cryptopia, self).__init__(params)
 
     async def fetch_markets(self):
-        response = await self.publicGetMarkets()
+        response = await self.publicGetTradePairs()
         result = []
         markets = response['Data']
         for i in range(0, len(markets)):
             market = markets[i]
-            id = market['TradePairId']
+            id = market['Id']
             symbol = market['Label']
             base, quote = symbol.split('/')
             result.append({
@@ -8536,6 +8781,8 @@ class cryptopia (Exchange):
                 'base': base,
                 'quote': quote,
                 'info': market,
+                'maker': market['TradeFee'] / 100,
+                'taker': market['TradeFee'] / 100,
             })
         return result
 
@@ -8545,7 +8792,7 @@ class cryptopia (Exchange):
             'id': self.market_id(market),
         }, params))
         orderbook = response['Data']
-        return self.parse_order_book(orderbook, None, 'Buy', 'Sell', 'Price', 'Total')
+        return self.parse_order_book(orderbook, None, 'Buy', 'Sell', 'Price', 'Volume')
 
     def parse_ticker(self, ticker, market):
         timestamp = self.milliseconds()
@@ -8728,7 +8975,6 @@ class cryptopia (Exchange):
             auth = 'amx ' + self.apiKey + ':' + self.binary_to_string(signature) + ':' + nonce
             headers = {
                 'Content-Type': 'application/json',
-                'Content-Length': len(body),
                 'Authorization': auth,
             }
         response = await self.fetch(url, method, headers, body)
@@ -8748,11 +8994,12 @@ class dsx (Exchange):
             'name': 'DSX',
             'countries': 'UK',
             'rateLimit': 1500,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27990275-1413158a-645a-11e7-931c-94717f7510e3.jpg',
                 'api': {
-                    'mapi': 'https://dsx.uk/mapi',  # market data
-                    'tapi': 'https://dsx.uk/tapi',  # trading
+                    'mapi': 'https://dsx.uk/mapi', # market data
+                    'tapi': 'https://dsx.uk/tapi', # trading
                     'dwapi': 'https://dsx.uk/dwapi', # deposit/withdraw
                 },
                 'www': 'https://dsx.uk',
@@ -8764,7 +9011,8 @@ class dsx (Exchange):
                 ],
             },
             'api': {
-                'mapi': {# market data (public)
+                # market data (public)
+                'mapi': {
                     'get': [
                         'barsFromMoment/{id}/{period}/{start}', # empty reply :\
                         'depth/{id}',
@@ -8775,7 +9023,8 @@ class dsx (Exchange):
                         'trades/{id}',
                     ],
                 },
-                'tapi': {# trading (private)
+                # trading (private)
+                'tapi': {
                     'post': [
                         'getInfo',
                         'TransHistory',
@@ -8786,7 +9035,8 @@ class dsx (Exchange):
                         'CancelOrder',
                     ],
                 },
-                'dwapi': {# deposit / withdraw (private)
+                # deposit / withdraw (private)
+                'dwapi': {
                     'post': [
                         'getCryptoDepositAddress',
                         'cryptoWithdraw',
@@ -8877,7 +9127,7 @@ class dsx (Exchange):
 
     async def fetch_trades(self, symbol, params={}):
         await self.load_markets()
-        return self.mapiGetTradesId(self.extend({
+        return await self.mapiGetTradesId(self.extend({
             'id': self.market_id(symbol),
         }, params))
 
@@ -8899,7 +9149,7 @@ class dsx (Exchange):
 
     async def cancel_order(self, id):
         await self.load_markets()
-        return self.tapiPostCancelOrder({'orderId': id})
+        return await self.tapiPostCancelOrder({'orderId': id})
 
     async def request(self, path, api='mapi', method='GET', params={}, headers=None, body=None):
         url = self.urls['api'][api]
@@ -8911,16 +9161,15 @@ class dsx (Exchange):
                 url += '?' + self.urlencode(query)
         else:
             nonce = self.nonce()
-            method = path
             body = self.urlencode(self.extend({
                 'method': path,
                 'nonce': nonce,
             }, query))
+            signature = self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512, 'base64')
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Key': self.apiKey,
-                'Sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512, 'base64'),
+                'Sign': self.decode(signature),
             }
         response = await self.fetch(url, method, headers, body)
         if api == 'mapi':
@@ -8941,6 +9190,7 @@ class exmo (Exchange):
             'countries': ['ES', 'RU'], # Spain, Russia
             'rateLimit': 1000, # once every 350 ms ≈ 180 requests per minute ≈ 3 requests per second
             'version': 'v1',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766491-1b0ea956-5eda-11e7-9225-40d67b481b8d.jpg',
@@ -9109,7 +9359,7 @@ class exmo (Exchange):
 
     async def cancel_order(self, id):
         await self.load_markets()
-        return self.privatePostOrderCancel({'order_id': id})
+        return await self.privatePostOrderCancel({'order_id': id})
 
     async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
         url = self.urls['api'] + '/' + self.version + '/' + path
@@ -9121,7 +9371,6 @@ class exmo (Exchange):
             body = self.urlencode(self.extend({'nonce': nonce}, params))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Key': self.apiKey,
                 'Sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512),
             }
@@ -9143,6 +9392,7 @@ class flowbtc (Exchange):
             'countries': 'BR', # Brazil
             'version': 'v1',
             'rateLimit': 1000,
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28162465-cd815d4c-67cf-11e7-8e57-438bea0523a2.jpg',
                 'api': 'https://api.flowbtc.com:8400/ajax',
@@ -9320,7 +9570,6 @@ class flowbtc (Exchange):
             }, params))
             headers = {
                 'Content-Type': 'application/json',
-                'Content-Length': len(body),
             }
         response = await self.fetch(url, method, headers, body)
         if 'isAccepted' in response:
@@ -9337,6 +9586,7 @@ class foxbit (blinktrade):
             'id': 'foxbit',
             'name': 'FoxBit',
             'countries': 'BR',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27991413-11b40d42-647f-11e7-91ee-78ced874dd09.jpg',
                 'api': {
@@ -9502,6 +9752,7 @@ class fybse (fyb):
             'id': 'fybse',
             'name': 'FYB-SE',
             'countries': 'SE', # Sweden
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766512-31019772-5edb-11e7-8241-2e675e6797f1.jpg',
                 'api': 'https://www.fybse.se/api/SEK',
@@ -9524,6 +9775,7 @@ class fybsg (fyb):
             'id': 'fybsg',
             'name': 'FYB-SG',
             'countries': 'SG', # Singapore
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766513-3364d56a-5edb-11e7-9e6b-d5898bb89c81.jpg',
                 'api': 'https://www.fybsg.com/api/SGD',
@@ -9548,6 +9800,7 @@ class gatecoin (Exchange):
             'rateLimit': 2000,
             'countries': 'HK', # Hong Kong
             'comment': 'a regulated/licensed exchange',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'hasFetchOHLCV': True,
             'timeframes': {
@@ -9916,6 +10169,7 @@ class gdax (Exchange):
             'name': 'GDAX',
             'countries': 'US',
             'rateLimit': 1000,
+            'hasCORS': True,
             'hasFetchOHLCV': True,
             'timeframes': {
                 '1m': 60,
@@ -10083,7 +10337,7 @@ class gdax (Exchange):
 
     async def fetch_trades(self, market, params={}):
         await self.load_markets()
-        return self.publicGetProductsIdTrades(self.extend({
+        return await self.publicGetProductsIdTrades(self.extend({
             'id': self.market_id(market), # fixes issue #2
         }, params))
 
@@ -10100,12 +10354,17 @@ class gdax (Exchange):
     async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.publicGetProductsIdCandles(self.extend({
+        granularity = self.timeframes[timeframe]
+        request = {
             'id': market['id'],
-            'granularity': self.timeframes[timeframe],
-            'start': since,
-            'end': limit,
-        }, params))
+            'granularity': granularity,
+        }
+        if since:
+            request['start'] = self.iso8601(since)
+            if not limit:
+                limit = 200 # max = 200
+            request['end'] = self.iso8601(limit * granularity * 1000 + since)
+        response = await self.publicGetProductsIdCandles(self.extend(request, params))
         return self.parse_ohlcvs(response, market, timeframe, since, limit)
 
     async def fetchTime(self):
@@ -10131,7 +10390,7 @@ class gdax (Exchange):
 
     async def cancel_order(self, id):
         await self.load_markets()
-        return self.privateDeleteOrdersId({'id': id})
+        return await self.privateDeleteOrdersId({'id': id})
 
     async def getPaymentMethods(self):
         response = await self.privateGetPaymentMethods()
@@ -10194,6 +10453,7 @@ class gemini (Exchange):
             'countries': 'US',
             'rateLimit': 1500, # 200 for private API
             'version': 'v1',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27816857-ce7be644-6096-11e7-82d6-3c257263229c.jpg',
                 'api': 'https://api.gemini.com',
@@ -10364,7 +10624,6 @@ class gemini (Exchange):
             signature = self.hmac(payload, self.encode(self.secret), hashlib.sha384)
             headers = {
                 'Content-Type': 'text/plain',
-                'Content-Length': 0,
                 'X-GEMINI-APIKEY': self.apiKey,
                 'X-GEMINI-PAYLOAD': payload,
                 'X-GEMINI-SIGNATURE': signature,
@@ -10387,6 +10646,7 @@ class hitbtc (Exchange):
             'countries': 'HK', # Hong Kong
             'rateLimit': 1500,
             'version': '1',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766555-8eaec20e-5edc-11e7-9c5b-6dc69fc42f5e.jpg',
@@ -10654,6 +10914,7 @@ class hitbtc2 (hitbtc):
             'countries': 'HK', # Hong Kong
             'rateLimit': 1500,
             'version': '2',
+            'hasCORS': True,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766555-8eaec20e-5edc-11e7-9c5b-6dc69fc42f5e.jpg',
@@ -10739,9 +11000,9 @@ class hitbtc2 (hitbtc):
             })
         return result
 
-    async def fetch_balance(self, params={}):
+    async def fetch_balance(self):
         await self.load_markets()
-        balances = await self.privateGetAccountBalance()
+        balances = await self.privateGetTradingBalance()
         result = {'info': balances}
         for b in range(0, len(balances)):
             balance = balances[b]
@@ -10765,59 +11026,23 @@ class hitbtc2 (hitbtc):
 
     def parse_ticker(self, ticker, market):
         timestamp = self.parse8601(ticker['timestamp'])
-        high = None
-        if 'high' in ticker:
-            if ticker['high']:
-                high = float(ticker['high'])
-        low = None
-        if 'low' in ticker:
-            if ticker['low']:
-                low = float(ticker['low'])
-        open = None
-        if 'open' in ticker:
-            if ticker['open']:
-                open = float(ticker['open'])
-        close = None
-        if 'close' in ticker:
-            if ticker['close']:
-                close = float(ticker['close'])
-        last = None
-        if 'last' in ticker:
-            if ticker['last']:
-                last = float(ticker['last'])
-        bid = None
-        if 'bid' in ticker:
-            if ticker['bid']:
-                bid = float(ticker['bid'])
-        ask = None
-        if 'ask' in ticker:
-            if ticker['ask']:
-                ask = float(ticker['ask'])
-        baseVolume = None
-        if 'volume' in ticker:
-            if ticker['volume']:
-                baseVolume = float(ticker['volume'])
-        quoteVolume = None
-        if 'quoteVolume' in ticker:
-            if ticker['quoteVolume']:
-                quoteVolume = float(ticker['quoteVolume'])
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
-            'high': high,
-            'low': low,
-            'bid': bid,
-            'ask': ask,
+            'high': self.safe_float(ticker, 'high'),
+            'low': self.safe_float(ticker, 'low'),
+            'bid': self.safe_float(ticker, 'bid'),
+            'ask': self.safe_float(ticker, 'ask'),
             'vwap': None,
-            'open': open,
-            'close': None,
+            'open': self.safe_float(ticker, 'open'),
+            'close': self.safe_float(ticker, 'close'),
             'first': None,
-            'last': last,
+            'last': self.safe_float(ticker, 'last'),
             'change': None,
             'percentage': None,
             'average': None,
-            'baseVolume': baseVolume,
-            'quoteVolume': quoteVolume,
+            'baseVolume': self.safe_float(ticker, 'volume'),
+            'quoteVolume': self.safe_float(ticker, 'quoteVolume'),
             'info': ticker,
         }
 
@@ -10888,7 +11113,7 @@ class hitbtc2 (hitbtc):
 
     async def cancel_order(self, id, params={}):
         await self.load_markets()
-        return self.privateDeleteOrder(self.extend({
+        return self.privateDeleteOrderClientOrderId(self.extend({
             'clientOrderId': id,
         }, params))
 
@@ -11002,6 +11227,9 @@ class huobi1 (Exchange):
     async def fetch_markets(self):
         response = await self.publicGetCommonSymbols()
         markets = response['data']
+        numMarkets = len(markets)
+        if numMarkets < 1:
+            raise ExchangeError(self.id + ' publicGetCommonSymbols returned empty response: ' + self.json(response))
         result = []
         for i in range(0, len(markets)):
             market = markets[i]
@@ -11194,7 +11422,6 @@ class huobi1 (Exchange):
                 body = self.json(query)
                 headers = {
                     'Content-Type': 'application/json',
-                    'Content-Length': len(body),
                 }
         else:
             if params:
@@ -11215,6 +11442,7 @@ class huobicny (huobi1):
             'id': 'huobicny',
             'name': 'Huobi CNY',
             'hostname': 'be.huobi.com',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766569-15aa7b9a-5edd-11e7-9e7f-44791f4ee49c.jpg',
                 'api': 'https://be.huobi.com',
@@ -11239,6 +11467,7 @@ class huobipro (huobi1):
             'id': 'huobipro',
             'name': 'Huobi Pro',
             'hostname': 'api.huobi.pro',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766569-15aa7b9a-5edd-11e7-9e7f-44791f4ee49c.jpg',
                 'api': 'https://api.huobi.pro',
@@ -11266,6 +11495,7 @@ class huobi (Exchange):
             'countries': 'CN',
             'rateLimit': 2000,
             'version': 'v3',
+            'hasCORS': False,
             'hasFetchOHLCV': True,
             'timeframes': {
                 '1m': '001',
@@ -11468,7 +11698,6 @@ class huobi (Exchange):
             body = self.urlencode(query)
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
             }
         else:
             url += '/' + api + '/' + self.implode_params(path, params) + '_json.js'
@@ -11485,6 +11714,228 @@ class huobi (Exchange):
 
 #------------------------------------------------------------------------------
 
+class independentreserve (Exchange):
+
+    def __init__(self, config={}):
+        params = {
+            'id': 'independentreserve',
+            'name': 'Independent Reserve',
+            'countries': ['AU', 'NZ'], # Australia, New Zealand
+            'rateLimit': 1000,
+            'hasCORS': False,
+            'urls': {
+                'logo': 'https://user-images.githubusercontent.com/1294454/30521662-cf3f477c-9bcb-11e7-89bc-d1ac85012eda.jpg',
+                'api': {
+                    'public': 'https://api.independentreserve.com/Public',
+                    'private': 'https://api.independentreserve.com/Private',
+                },
+                'www': 'https://www.independentreserve.com',
+                'doc': 'https://www.independentreserve.com/API',
+            },
+            'api': {
+                'public': {
+                    'get': [
+                        'GetValidPrimaryCurrencyCodes',
+                        'GetValidSecondaryCurrencyCodes',
+                        'GetValidLimitOrderTypes',
+                        'GetValidMarketOrderTypes',
+                        'GetValidOrderTypes',
+                        'GetValidTransactionTypes',
+                        'GetMarketSummary',
+                        'GetOrderBook',
+                        'GetTradeHistorySummary',
+                        'GetRecentTrades',
+                        'GetFxRates',
+                    ],
+                },
+                'private': {
+                    'post': [
+                        'PlaceLimitOrder',
+                        'PlaceMarketOrder',
+                        'CancelOrder',
+                        'GetOpenOrders',
+                        'GetClosedOrders',
+                        'GetClosedFilledOrders',
+                        'GetOrderDetails',
+                        'GetAccounts',
+                        'GetTransactions',
+                        'GetDigitalCurrencyDepositAddress',
+                        'GetDigitalCurrencyDepositAddresses',
+                        'SynchDigitalCurrencyDepositAddressWithBlockchain',
+                        'WithdrawDigitalCurrency',
+                        'RequestFiatWithdrawal',
+                        'GetTrades',
+                    ],
+                },
+            },
+        }
+        params.update(config)
+        super(independentreserve, self).__init__(params)
+
+    async def fetch_markets(self):
+        baseCurrencies = await self.publicGetValidPrimaryCurrencyCodes()
+        quoteCurrencies = await self.publicGetValidSecondaryCurrencyCodes()
+        result = []
+        for i in range(0, len(baseCurrencies)):
+            baseId = baseCurrencies[i]
+            baseIdUppercase = baseId.upper()
+            base = self.commonCurrencyCode(baseIdUppercase)
+            for j in range(0, len(quoteCurrencies)):
+                quoteId = quoteCurrencies[j]
+                quoteIdUppercase = quoteId.upper()
+                quote = self.commonCurrencyCode(quoteIdUppercase)
+                id = baseId + '/' + quoteId
+                symbol = base + '/' + quote
+                result.append({
+                    'id': id,
+                    'symbol': symbol,
+                    'base': base,
+                    'quote': quote,
+                    'baseId': baseId,
+                    'quoteId': quoteId,
+                    'info': id,
+                })
+        return result
+
+    async def fetch_balance(self, params={}):
+        await self.load_markets()
+        balances = await self.privatePostGetAccounts()
+        result = {'info': balances}
+        for i in range(0, len(balances)):
+            balance = balances[i]
+            currencyCode = balance['CurrencyCode']
+            uppercase = currencyCode.upper()
+            currency = self.commonCurrencyCode(uppercase)
+            account = self.account()
+            account['free'] = balance['AvailableBalance']
+            account['total'] = balance['TotalBalance']
+            account['used'] = account['total'] - account['free']
+            result[currency] = account
+        return result
+
+    async def fetch_order_book(self, symbol, params={}):
+        await self.load_markets()
+        market = self.market(symbol)
+        response = await self.publicGetOrderBook(self.extend({
+            'primaryCurrencyCode': market['baseId'],
+            'secondaryCurrencyCode': market['quoteId'],
+        }, params))
+        timestamp = self.parse8601(response['CreatedTimestampUtc'])
+        return self.parse_order_book(response, timestamp, 'BuyOrders', 'SellOrders', 'Price', 'Volume')
+
+    def parse_ticker(self, ticker, market):
+        timestamp = self.parse8601(ticker['CreatedTimestampUtc'])
+        return {
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'high': ticker['DayHighestPrice'],
+            'low': ticker['DayLowestPrice'],
+            'bid': ticker['CurrentHighestBidPrice'],
+            'ask': ticker['CurrentLowestOfferPrice'],
+            'vwap': None,
+            'open': None,
+            'close': None,
+            'first': None,
+            'last': ticker['LastPrice'],
+            'change': None,
+            'percentage': None,
+            'average': ticker['DayAvgPrice'],
+            'baseVolume': ticker['DayVolumeXbt'],
+            'quoteVolume': ticker['DayVolumeXbtInSecondaryCurrrency'],
+            'info': ticker,
+        }
+
+    async def fetch_ticker(self, symbol):
+        await self.load_markets()
+        market = self.market(symbol)
+        response = await self.publicGetMarketSummary({
+            'primaryCurrencyCode': market['baseId'],
+            'secondaryCurrencyCode': market['quoteId'],
+        })
+        return self.parse_ticker(response, market)
+
+    def parse_trade(self, trade, market):
+        timestamp = self.parse8601(trade['TradeTimestampUtc'])
+        return {
+            'id': None,
+            'info': trade,
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'symbol': market['symbol'],
+            'order': None,
+            'type': None,
+            'side': None,
+            'price': trade['SecondaryCurrencyTradePrice'],
+            'amount': trade['PrimaryCurrencyAmount'],
+        }
+
+    async def fetch_trades(self, symbol, params={}):
+        await self.load_markets()
+        market = self.market(symbol)
+        response = await self.publicGetRecentTrades(self.extend({
+            'primaryCurrencyCode': market['baseId'],
+            'secondaryCurrencyCode': market['quoteId'],
+            'numberOfRecentTradesToRetrieve': 50, # max = 50
+        }, params))
+        return self.parse_trades(response['Trades'], market)
+
+    async def create_order(self, symbol, type, side, amount, price=None, params={}):
+        await self.load_markets()
+        market = self.market(symbol)
+        capitalizedOrderType = self.capitalize(type)
+        method = 'Place' + capitalizedOrderType + 'Order'
+        orderType = capitalizedOrderType
+        orderType += 'Offer' if(side == 'sell') else 'Bid'
+        order = self.ordered({
+            'primaryCurrencyCode': market['baseId'],
+            'secondaryCurrencyCode': market['quoteId'],
+            'orderType': orderType,
+        })
+        if type == 'limit':
+            order['price'] = price
+        order['volume'] = amount
+        response = await getattr(self, method)(self.extend(order, params))
+        return {
+            'info': response,
+            'id': response['OrderGuid'],
+        }
+
+    async def cancel_order(self, id):
+        await self.load_markets()
+        return self.privatePostCancelOrder({'orderGuid': id})
+
+    async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
+        url = self.urls['api'][api] + '/' + path
+        if api == 'public':
+            if params:
+                url += '?' + self.urlencode(params)
+        else:
+            nonce = self.nonce()
+            auth = [
+                url,
+                'apiKey=' + self.apiKey,
+                'nonce=' + str(nonce),
+            ]
+            keysorted = self.keysort(params)
+            keys = list(params.keys())
+            for i in range(0, len(keys)):
+                key = keys[i]
+                auth.append(key + '=' + params[key])
+            message = ','.join(auth)
+            signature = self.hmac(self.encode(message), self.encode(self.secret))
+            query = self.keysort(self.extend({
+                'apiKey': self.apiKey,
+                'nonce': nonce,
+                'signature': signature,
+            }, params))
+            body = self.json(query)
+            headers = {'Content-Type': 'application/json'}
+        response = await self.fetch(url, method, headers, body)
+        # todo error handling
+        return response
+
+#------------------------------------------------------------------------------
+
 class itbit (Exchange):
 
     def __init__(self, config={}):
@@ -11494,6 +11945,7 @@ class itbit (Exchange):
             'countries': 'US',
             'rateLimit': 2000,
             'version': 'v1',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27822159-66153620-60ad-11e7-89e7-005f6d7f3de0.jpg',
                 'api': 'https://api.itbit.com',
@@ -11553,21 +12005,13 @@ class itbit (Exchange):
             'symbol': self.market_id(symbol),
         })
         timestamp = self.parse8601(ticker['serverTimeUTC'])
-        bid = None
-        ask = None
-        if 'bid' in ticker:
-            if ticker['bid']:
-                bid = float(ticker['bid'])
-        if 'ask' in ticker:
-            if ticker['ask']:
-                ask = float(ticker['ask'])
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
             'high': float(ticker['high24h']),
             'low': float(ticker['low24h']),
-            'bid': bid,
-            'ask': ask,
+            'bid': self.safe_float(ticker, 'bid'),
+            'ask': self.safe_float(ticker, 'ask'),
             'vwap': float(ticker['vwap24h']),
             'open': float(ticker['openToday']),
             'close': None,
@@ -11629,6 +12073,9 @@ class itbit (Exchange):
     async def create_order(self, symbol, type, side, amount, price=None, params={}):
         if type == 'market':
             raise ExchangeError(self.id + ' allows limit orders only')
+        walletIdInParams = ('walletId' in list(params.keys()))
+        if not walletIdInParams:
+            raise ExchangeError(self.id + ' createOrder requires a walletId parameter')
         amount = str(amount)
         price = str(price)
         market = self.market(symbol)
@@ -11647,7 +12094,10 @@ class itbit (Exchange):
             'id': response['id'],
         }
 
-    async def cancel_order(self, id, params={}):
+    def cancel_order(self, id, params={}):
+        walletIdInParams = ('walletId' in list(params.keys()))
+        if not walletIdInParams:
+            raise ExchangeError(self.id + ' cancelOrder requires a walletId parameter')
         return self.privateDeleteWalletsWalletIdOrdersId(self.extend({
             'id': id,
         }, params))
@@ -11676,7 +12126,7 @@ class itbit (Exchange):
                 'X-Auth-Timestamp': timestamp,
                 'X-Auth-Nonce': nonce,
             }
-        response = self.fetch(url, method, headers, body)
+        response = await self.fetch(url, method, headers, body)
         if 'code' in response:
             raise ExchangeError(self.id + ' ' + self.json(response))
         return response
@@ -11692,6 +12142,7 @@ class jubi (Exchange):
             'countries': 'CN',
             'rateLimit': 1500,
             'version': 'v1',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766581-9d397d9a-5edd-11e7-8fb9-5d8236c0e692.jpg',
@@ -11853,7 +12304,7 @@ class jubi (Exchange):
 
     async def cancel_order(self, id, params={}):
         await self.load_markets()
-        return self.privateDeleteWalletsWalletIdOrdersId(self.extend({
+        return self.privatePostTradeCancel(self.extend({
             'id': id,
         }, params))
 
@@ -11874,7 +12325,6 @@ class jubi (Exchange):
             body = self.urlencode(query)
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
             }
         response = await self.fetch(url, method, headers, body)
         if 'result' in response:
@@ -11893,6 +12343,7 @@ class kraken (Exchange):
             'countries': 'US',
             'version': '0',
             'rateLimit': 1500,
+            'hasCORS': False,
             'hasFetchTickers': True,
             'hasFetchOHLCV': True,
             'marketsByAltname': {},
@@ -11915,6 +12366,7 @@ class kraken (Exchange):
                     'https://www.kraken.com/en-us/help/api',
                     'https://github.com/nothingisdead/npm-kraken-api',
                 ],
+                'fees': 'https://www.kraken.com/en-us/help/fees',
             },
             'api': {
                 'public': {
@@ -11975,6 +12427,9 @@ class kraken (Exchange):
             quote = self.commonCurrencyCode(quote)
             darkpool = id.find('.d') >= 0
             symbol = market['altname'] if darkpool else(base + '/' + quote)
+            maker = None
+            if 'fees_maker' in market:
+                maker = market['fees_maker'][0][1]
             result.append({
                 'id': id,
                 'symbol': symbol,
@@ -11983,6 +12438,8 @@ class kraken (Exchange):
                 'darkpool': darkpool,
                 'info': market,
                 'altname': market['altname'],
+                'maker': maker,
+                'taker': market['fees'][0][1],
             })
         self.marketsByAltname = self.index_by(result, 'altname')
         return result
@@ -12069,11 +12526,13 @@ class kraken (Exchange):
     async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.publicGetOHLC(self.extend({
+        request = {
             'pair': market['id'],
             'interval': self.timeframes[timeframe],
-            'since': since,
-        }, params))
+        }
+        if since:
+            request['since'] = int(since / 1000)
+        response = await self.publicGetOHLC(self.extend(request, params))
         ohlcvs = response['result'][market['id']]
         return self.parse_ohlcvs(ohlcvs, market, timeframe, since, limit)
 
@@ -12268,6 +12727,7 @@ class lakebtc (Exchange):
             'name': 'LakeBTC',
             'countries': 'US',
             'version': 'api_v2',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28074120-72b7c38a-6660-11e7-92d9-d9027502281d.jpg',
                 'api': 'https://api.lakebtc.com',
@@ -12355,27 +12815,23 @@ class lakebtc (Exchange):
         })
         ticker = tickers[market['id']]
         timestamp = self.milliseconds()
-        volume = None
-        if 'volume' in ticker:
-            if ticker['volume']:
-                volume = float(ticker['volume'])
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
-            'high': float(ticker['high']),
-            'low': float(ticker['low']),
-            'bid': float(ticker['bid']),
-            'ask': float(ticker['ask']),
+            'high': self.safe_float(ticker, 'high'),
+            'low': self.safe_float(ticker, 'low'),
+            'bid': self.safe_float(ticker, 'bid'),
+            'ask': self.safe_float(ticker, 'ask'),
             'vwap': None,
             'open': None,
             'close': None,
             'first': None,
-            'last': float(ticker['last']),
+            'last': self.safe_float(ticker, 'last'),
             'change': None,
             'percentage': None,
             'average': None,
             'baseVolume': None,
-            'quoteVolume': volume,
+            'quoteVolume': self.safe_float(ticker, 'volume'),
             'info': ticker,
         }
 
@@ -12450,10 +12906,9 @@ class lakebtc (Exchange):
             headers = {
                 'Json-Rpc-Tonce': nonce,
                 'Authorization': "Basic " + self.apiKey + ':' + signature,
-                'Content-Length': len(body),
                 'Content-Type': 'application/json',
             }
-        response = self.fetch(url, method, headers, body)
+        response = await self.fetch(url, method, headers, body)
         if 'error' in response:
             raise ExchangeError(self.id + ' ' + self.json(response))
         return response
@@ -12468,6 +12923,7 @@ class livecoin (Exchange):
             'name': 'LiveCoin',
             'countries': ['US', 'UK', 'RU'],
             'rateLimit': 1000,
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27980768-f22fc424-638a-11e7-89c9-6010a54ff9be.jpg',
@@ -12692,8 +13148,9 @@ class liqui (Exchange):
             'id': 'liqui',
             'name': 'Liqui',
             'countries': 'UA',
-            'rateLimit': 1000,
+            'rateLimit': 2000,
             'version': '3',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27982022-75aea828-63a0-11e7-9511-ca584a8edd74.jpg',
@@ -12703,6 +13160,7 @@ class liqui (Exchange):
                 },
                 'www': 'https://liqui.io',
                 'doc': 'https://liqui.io/api',
+                'fees': 'https://liqui.io/fee',
             },
             'api': {
                 'public': {
@@ -12727,7 +13185,14 @@ class liqui (Exchange):
                         'CreateCoupon',
                         'RedeemCoupon',
                     ],
-                }
+                },
+            },
+            'fees': {
+                'trading': {
+                    'maker': 0.001,
+                    'taker': 0.0025,
+                },
+                'funding': 0.0,
             },
         }
         params.update(config)
@@ -12749,13 +13214,14 @@ class liqui (Exchange):
             base = self.commonCurrencyCode(base)
             quote = self.commonCurrencyCode(quote)
             symbol = base + '/' + quote
-            result.append({
+            result.append(self.extend(self.fees['trading'], {
                 'id': id,
                 'symbol': symbol,
                 'base': base,
                 'quote': quote,
+                'taker': market['fee'],
                 'info': market,
-            })
+            }))
         return result
 
     async def fetch_balance(self, params={}):
@@ -12798,20 +13264,20 @@ class liqui (Exchange):
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
-            'high': ticker['high'] if ticker['high'] else None,
-            'low': ticker['low'] if ticker['low'] else None,
-            'bid': ticker['buy'] if ticker['sell'] else None,
-            'ask': ticker['sell'] if ticker['buy'] else None,
+            'high': self.safe_float(ticker, 'high'),
+            'low': self.safe_float(ticker, 'low'),
+            'bid': self.safe_float(ticker, 'buy'),
+            'ask': self.safe_float(ticker, 'sell'),
             'vwap': None,
             'open': None,
             'close': None,
             'first': None,
-            'last': ticker['last'] if ticker['last'] else None,
+            'last': self.safe_float(ticker, 'last'),
             'change': None,
             'percentage': None,
-            'average': ticker['avg'] if ticker['avg'] else None,
-            'baseVolume': ticker['vol_cur'] if ticker['vol_cur'] else None,
-            'quoteVolume': ticker['vol'] if ticker['vol'] else None,
+            'average': self.safe_float(ticker, 'avg'),
+            'baseVolume': self.safe_float(ticker, 'vol_cur'),
+            'quoteVolume': self.safe_float(ticker, 'vol'),
             'info': ticker,
         }
 
@@ -12961,7 +13427,6 @@ class liqui (Exchange):
             signature = self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512)
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': str(len(body)),
                 'Key': self.apiKey,
                 'Sign': signature,
             }
@@ -12982,6 +13447,7 @@ class luno (Exchange):
             'countries': ['GB', 'SG', 'ZA'],
             'rateLimit': 3000,
             'version': '1',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766607-8c1a69d8-5ede-11e7-930c-540b5eb9be24.jpg',
@@ -13208,6 +13674,7 @@ class mercado (Exchange):
             'countries': 'BR', # Brazil
             'rateLimit': 1000,
             'version': 'v3',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27837060-e7c58714-60ea-11e7-9192-f05e86adb83f.jpg',
                 'api': {
@@ -13377,6 +13844,7 @@ class mixcoins (Exchange):
             'countries': ['GB', 'HK'],
             'rateLimit': 1500,
             'version': 'v1',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/30237212-ed29303c-9535-11e7-8af8-fcd381cfa20c.jpg',
                 'api': 'https://mixcoins.com/api',
@@ -13515,7 +13983,6 @@ class mixcoins (Exchange):
             }, params))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Key': self.apiKey,
                 'Sign': self.hmac(self.encode(body), self.secret, hashlib.sha512),
             }
@@ -13524,6 +13991,207 @@ class mixcoins (Exchange):
             if response['status'] == 200:
                 return response
         raise ExchangeError(self.id + ' ' + self.json(response))
+
+#------------------------------------------------------------------------------
+
+class nova (Exchange):
+
+    def __init__(self, config={}):
+        params = {
+            'id': 'nova',
+            'name': 'Novaexchange',
+            'countries': 'TZ', # Tanzania
+            'rateLimit': 2000,
+            'version': 'v2',
+            'hasCORS': False,
+            'urls': {
+                'logo': 'https://user-images.githubusercontent.com/1294454/30518571-78ca0bca-9b8a-11e7-8840-64b83a4a94b2.jpg',
+                'api': 'https://novaexchange.com/remote',
+                'www': 'https://novaexchange.com',
+                'doc': 'https://novaexchange.com/remote/faq',
+            },
+            'api': {
+                'public': {
+                    'get': [
+                        'markets/',
+                        'markets/{basecurrency}',
+                        'market/info/{pair}/',
+                        'market/orderhistory/{pair}/',
+                        'market/openorders/{pair}/buy/',
+                        'market/openorders/{pair}/sell/',
+                        'market/openorders/{pair}/both/',
+                        'market/openorders/{pair}/{ordertype}/',
+                    ],
+                },
+                'private': {
+                    'post': [
+                        'getbalances/',
+                        'getbalance/{currency}/',
+                        'getdeposits/',
+                        'getwithdrawals/',
+                        'getnewdepositaddress/{currency}/',
+                        'getdepositaddress/{currency}/',
+                        'myopenorders/',
+                        'myopenorders_market/{pair}/',
+                        'cancelorder/{orderid}/',
+                        'withdraw/{currency}/',
+                        'trade/{pair}/',
+                        'tradehistory/',
+                        'getdeposithistory/',
+                        'getwithdrawalhistory/',
+                        'walletstatus/',
+                        'walletstatus/{currency}/',
+                    ],
+                },
+            },
+        }
+        params.update(config)
+        super(nova, self).__init__(params)
+
+    async def fetch_markets(self):
+        response = await self.publicGetMarkets()
+        markets = response['markets']
+        result = []
+        for i in range(0, len(markets)):
+            market = markets[i]
+            if not market['disabled']:
+                id = market['marketname']
+                quote, base = id.split('_')
+                symbol = base + '/' + quote
+                result.append({
+                    'id': id,
+                    'symbol': symbol,
+                    'base': base,
+                    'quote': quote,
+                    'info': market,
+                })
+        return result
+
+    async def fetch_order_book(self, symbol, params={}):
+        await self.load_markets()
+        orderbook = await self.publicGetMarketOpenordersPairBoth(self.extend({
+            'pair': self.market_id(symbol),
+        }, params))
+        return self.parse_order_book(orderbook, None, 'buyorders', 'sellorders', 'price', 'amount')
+
+    async def fetch_ticker(self, symbol):
+        await self.load_markets()
+        response = await self.publicGetMarketInfoPair({
+            'pair': self.market_id(symbol),
+        })
+        ticker = response['markets'][0]
+        timestamp = self.milliseconds()
+        return {
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'high': float(ticker['high24h']),
+            'low': float(ticker['low24h']),
+            'bid': self.safe_float(ticker, 'bid'),
+            'ask': self.safe_float(ticker, 'ask'),
+            'vwap': None,
+            'open': None,
+            'close': None,
+            'first': None,
+            'last': float(ticker['last_price']),
+            'change': float(ticker['change24h']),
+            'percentage': None,
+            'average': None,
+            'baseVolume': None,
+            'quoteVolume': float(ticker['volume24h']),
+            'info': ticker,
+        }
+
+    def parse_trade(self, trade, market):
+        timestamp = trade['unix_t_datestamp'] * 1000
+        return {
+            'info': trade,
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'symbol': market['symbol'],
+            'id': None,
+            'order': None,
+            'type': None,
+            'side': trade['tradetype'].lower(),
+            'price': float(trade['price']),
+            'amount': float(trade['amount']),
+        }
+
+    async def fetch_trades(self, symbol, params={}):
+        await self.load_markets()
+        market = self.market(symbol)
+        response = await self.publicGetMarketOrderhistoryPair(self.extend({
+            'pair': market['id'],
+        }, params))
+        return self.parse_trades(response['items'], market)
+
+    async def fetch_balance(self, params={}):
+        await self.load_markets()
+        response = await self.privatePostGetbalances()
+        balances = response['balances']
+        result = {'info': response}
+        for b in range(0, len(balances)):
+            balance = balances[b]
+            currency = balance['currency']
+            lockbox = float(balance['amount_lockbox'])
+            trades = float(balance['amount_trades'])
+            account = {
+                'free': float(balance['amount']),
+                'used': self.sum(lockbox, trades),
+                'total': float(balance['amount_total']),
+            }
+            result[currency] = account
+        return result
+
+    async def create_order(self, symbol, type, side, amount, price=None, params={}):
+        if type == 'market':
+            raise ExchangeError(self.id + ' allows limit orders only')
+        await self.load_markets()
+        amount = str(amount)
+        price = str(price)
+        market = self.market(symbol)
+        order = {
+            'tradetype': side.upper(),
+            'tradeamount': amount,
+            'tradeprice': price,
+            'tradebase': 1,
+            'pair': market['id'],
+        }
+        response = await self.privatePostTradePair(self.extend(order, params))
+        return {
+            'info': response,
+            'id': None,
+        }
+
+    async def cancel_order(self, id, params={}):
+        return self.privatePostCancelorder(self.extend({
+            'orderid': id,
+        }, params))
+
+    async def request(self, path, api='public', method='GET', params={}, headers=None, body=None):
+        url = self.urls['api'] + '/' + self.version + '/'
+        if api == 'private':
+            url += api + '/'
+        url += self.implode_params(path, params)
+        query = self.omit(params, self.extract_params(path))
+        if api == 'public':
+            if query:
+                url += '?' + self.urlencode(query)
+        else:
+            nonce = str(self.nonce())
+            url += '?' + self.urlencode({'nonce': nonce})
+            signature = self.hmac(self.encode(url), self.encode(self.secret), hashlib.sha512, 'base64')
+            body = self.urlencode(self.extend({
+                'apikey': self.apiKey,
+                'signature': signature,
+            }, query))
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            }
+        response = await self.fetch(url, method, headers, body)
+        if 'status' in response:
+            if response['status'] != 'success':
+                raise ExchangeError(self.id + ' ' + self.json(response))
+        return response
 
 #------------------------------------------------------------------------------
 
@@ -13614,10 +14282,17 @@ class okcoin (Exchange):
         params.update(config)
         super(okcoin, self).__init__(params)
 
-    async def fetch_order_book(self, market, params={}):
-        orderbook = await self.publicGetDepth(self.extend({
-            'symbol': self.market_id(market),
-        }, params))
+    async def fetch_order_book(self, symbol, params={}):
+        market = self.market(symbol)
+        method = 'publicGet'
+        request = {
+            'symbol': market['id'],
+        }
+        if market['future']:
+            method += 'Future'
+            request['contract_type'] = 'this_week' # next_week, quarter
+        method += 'Depth'
+        orderbook = await getattr(self, method)(self.extend(request, params))
         timestamp = self.milliseconds()
         return {
             'bids': orderbook['bids'],
@@ -13650,9 +14325,15 @@ class okcoin (Exchange):
 
     async def fetch_ticker(self, symbol):
         market = self.market(symbol)
-        response = await self.publicGetTicker({
+        method = 'publicGet'
+        request = {
             'symbol': market['id'],
-        })
+        }
+        if market['future']:
+            method += 'Future'
+            request['contract_type'] = 'this_week' # next_week, quarter
+        method += 'Ticker'
+        response = await getattr(self, method)(request)
         timestamp = int(response['date']) * 1000
         ticker = self.extend(response['ticker'], {'timestamp': timestamp})
         return self.parse_ticker(ticker, market)
@@ -13676,24 +14357,37 @@ class okcoin (Exchange):
 
     async def fetch_trades(self, symbol, params={}):
         market = self.market(symbol)
-        response = await self.publicGetTrades(self.extend({
+        method = 'publicGet'
+        request = {
+            'symbol': market['id'],
+        }
+        if market['future']:
+            method += 'Future'
+            request['contract_type'] = 'this_week' # next_week, quarter
+        method += 'Trades'
+        response = await getattr(self, method)(self.extend({
             'symbol': market['id'],
         }, params))
         return self.parse_trades(response, market)
 
     async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=1440, params={}):
         market = self.market(symbol)
+        method = 'publicGet'
         request = {
             'symbol': market['id'],
             'type': self.timeframes[timeframe],
         }
+        if market['future']:
+            method += 'Future'
+            request['contract_type'] = 'this_week' # next_week, quarter
+        method += 'Kline'
         if limit:
             request['size'] = int(limit)
         if since:
             request['since'] = since
         else:
             request['since'] = self.milliseconds() - 86400000 # last 24 hours
-        response = await self.publicGetKline(self.extend(request, params))
+        response = await getattr(self, method)(self.extend(request, params))
         return self.parse_ohlcvs(response, market, timeframe, since, limit)
 
     async def fetch_balance(self, params={}):
@@ -13704,35 +14398,46 @@ class okcoin (Exchange):
             currency = self.currencies[c]
             lowercase = currency.lower()
             account = self.account()
-            if lowercase in balances['free']:
-                account['free'] = float(balances['free'][lowercase])
-            if lowercase in balances['freezed']:
-                account['used'] = float(balances['freezed'][lowercase])
+            account['free'] = self.safe_float(balances['free'], lowercase, 0.0)
+            account['used'] = self.safe_float(balances['freezed'], lowercase, 0.0)
             account['total'] = self.sum(account['free'], account['used'])
             result[currency] = account
         return result
 
-    async def create_order(self, market, type, side, amount, price=None, params={}):
+    async def create_order(self, symbol, type, side, amount, price=None, params={}):
+        market = self.market(symbol)
+        method = 'privatePost'
         order = {
-            'symbol': self.market_id(market),
+            'symbol': market['id'],
             'type': side,
         }
-        if type == 'limit':
-            order['price'] = price
-            order['amount'] = amount
+        if market['future']:
+            method += 'Future'
+            order = self.extend(order, {
+                'contract_type': 'this_week', # next_week, quarter
+                'match_price': 0, # match best counter party price? 0 or 1, ignores price if 1
+                'lever_rate': 10, # leverage rate value: 10 or 20(10 by default)
+                'price': price,
+                'amount': amount,
+            })
         else:
-            if side == 'buy':
-                order['price'] = params
-            else:
+            if type == 'limit':
+                order['price'] = price
                 order['amount'] = amount
-            order['type'] += '_market'
-        response = await self.privatePostTrade(self.extend(order, params))
+            else:
+                order['type'] += '_market'
+                if side == 'buy':
+                    order['price'] = params
+                else:
+                    order['amount'] = amount
+        method += 'Trade'
+        response = await getattr(self, method)(self.extend(order, params))
         return {
             'info': response,
             'id': str(response['order_id']),
         }
 
-    async def cancel_order(self, id, params={}):
+    def cancel_order(self, id, params={}):
         return self.privatePostCancelOrder(self.extend({
             'order_id': id,
         }, params))
@@ -13767,6 +14472,7 @@ class okcoincny (okcoin):
             'id': 'okcoincny',
             'name': 'OKCoin CNY',
             'countries': 'CN',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766792-8be9157a-5ee5-11e7-926c-6d69b8d3378d.jpg',
                 'api': 'https://www.okcoin.cn',
@@ -13774,11 +14480,11 @@ class okcoincny (okcoin):
                 'doc': 'https://www.okcoin.cn/rest_getStarted.html',
             },
             'markets': {
-                'BTC/CNY': {'id': 'btc_cny', 'symbol': 'BTC/CNY', 'base': 'BTC', 'quote': 'CNY'},
-                'LTC/CNY': {'id': 'ltc_cny', 'symbol': 'LTC/CNY', 'base': 'LTC', 'quote': 'CNY'},
-                'ETH/CNY': {'id': 'eth_cny', 'symbol': 'ETH/CNY', 'base': 'ETH', 'quote': 'CNY'},
-                'ETC/CNY': {'id': 'etc_cny', 'symbol': 'ETC/CNY', 'base': 'ETC', 'quote': 'CNY'},
-                'BCH/CNY': {'id': 'bcc_cny', 'symbol': 'BCH/CNY', 'base': 'BCH', 'quote': 'CNY'},
+                'BTC/CNY': {'id': 'btc_cny', 'symbol': 'BTC/CNY', 'base': 'BTC', 'quote': 'CNY', 'type': 'spot', 'spot': True, 'future': False},
+                'LTC/CNY': {'id': 'ltc_cny', 'symbol': 'LTC/CNY', 'base': 'LTC', 'quote': 'CNY', 'type': 'spot', 'spot': True, 'future': False},
+                'ETH/CNY': {'id': 'eth_cny', 'symbol': 'ETH/CNY', 'base': 'ETH', 'quote': 'CNY', 'type': 'spot', 'spot': True, 'future': False},
+                'ETC/CNY': {'id': 'etc_cny', 'symbol': 'ETC/CNY', 'base': 'ETC', 'quote': 'CNY', 'type': 'spot', 'spot': True, 'future': False},
+                'BCH/CNY': {'id': 'bcc_cny', 'symbol': 'BCH/CNY', 'base': 'BCH', 'quote': 'CNY', 'type': 'spot', 'spot': True, 'future': False},
             },
         }
         params.update(config)
@@ -13793,6 +14499,7 @@ class okcoinusd (okcoin):
             'id': 'okcoinusd',
             'name': 'OKCoin USD',
             'countries': ['CN', 'US'],
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766791-89ffb502-5ee5-11e7-8a5b-c5950b68ac65.jpg',
                 'api': 'https://www.okcoin.com',
@@ -13803,10 +14510,10 @@ class okcoinusd (okcoin):
                 ],
             },
             'markets': {
-                'BTC/USD': {'id': 'btc_usd', 'symbol': 'BTC/USD', 'base': 'BTC', 'quote': 'USD'},
-                'LTC/USD': {'id': 'ltc_usd', 'symbol': 'LTC/USD', 'base': 'LTC', 'quote': 'USD'},
-                'ETH/USD': {'id': 'eth_usd', 'symbol': 'ETH/USD', 'base': 'ETH', 'quote': 'USD'},
-                'ETC/USD': {'id': 'etc_usd', 'symbol': 'ETC/USD', 'base': 'ETC', 'quote': 'USD'},
+                'BTC/USD': {'id': 'btc_usd', 'symbol': 'BTC/USD', 'base': 'BTC', 'quote': 'USD', 'type': 'spot', 'spot': True, 'future': False},
+                'LTC/USD': {'id': 'ltc_usd', 'symbol': 'LTC/USD', 'base': 'LTC', 'quote': 'USD', 'type': 'spot', 'spot': True, 'future': False},
+                'ETH/USD': {'id': 'eth_usd', 'symbol': 'ETH/USD', 'base': 'ETH', 'quote': 'USD', 'type': 'spot', 'spot': True, 'future': False},
+                'ETC/USD': {'id': 'etc_usd', 'symbol': 'ETC/USD', 'base': 'ETC', 'quote': 'USD', 'type': 'spot', 'spot': True, 'future': False},
             },
         }
         params.update(config)
@@ -13821,6 +14528,7 @@ class okex (okcoin):
             'id': 'okex',
             'name': 'OKEX',
             'countries': ['CN', 'US'],
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/29562593-9038a9bc-8742-11e7-91cc-8201f845bfc1.jpg',
                 'api': 'https://www.okex.com',
@@ -13828,83 +14536,18 @@ class okex (okcoin):
                 'doc': 'https://www.okex.com/rest_getStarted.html',
             },
             'markets': {
-                'BTC/USD': {'id': 'btc_usd', 'symbol': 'BTC/USD', 'base': 'BTC', 'quote': 'USD'},
-                'LTC/USD': {'id': 'ltc_usd', 'symbol': 'LTC/USD', 'base': 'LTC', 'quote': 'USD'},
-                # 'LTC/BTC': {'id': 'ltc_btc', 'symbol': 'LTC/BTC', 'base': 'LTC', 'quote': 'BTC'},
-                # 'ETH/BTC': {'id': 'eth_btc', 'symbol': 'ETH/BTC', 'base': 'ETH', 'quote': 'BTC'},
-                # 'ETC/BTC': {'id': 'etc_btc', 'symbol': 'ETC/BTC', 'base': 'ETC', 'quote': 'BTC'},
-                # 'BCH/BTC': {'id': 'bcc_btc', 'symbol': 'BCH/BTC', 'base': 'BCH', 'quote': 'BTC'},
+                'BTC/USD': {'id': 'btc_usd', 'symbol': 'BTC/USD', 'base': 'BTC', 'quote': 'USD', 'type': 'future', 'spot': False, 'future': True},
+                'LTC/USD': {'id': 'ltc_usd', 'symbol': 'LTC/USD', 'base': 'LTC', 'quote': 'USD', 'type': 'future', 'spot': False, 'future': True},
+                'LTC/BTC': {'id': 'ltc_btc', 'symbol': 'LTC/BTC', 'base': 'LTC', 'quote': 'BTC', 'type': 'spot', 'spot': True, 'future': False},
+                'ETH/BTC': {'id': 'eth_btc', 'symbol': 'ETH/BTC', 'base': 'ETH', 'quote': 'BTC', 'type': 'spot', 'spot': True, 'future': False},
+                'ETC/BTC': {'id': 'etc_btc', 'symbol': 'ETC/BTC', 'base': 'ETC', 'quote': 'BTC', 'type': 'spot', 'spot': True, 'future': False},
+                'BCH/BTC': {'id': 'bcc_btc', 'symbol': 'BCH/BTC', 'base': 'BCH', 'quote': 'BTC', 'type': 'spot', 'spot': True, 'future': False},
             },
         }
         params.update(config)
         super(okex, self).__init__(params)
 
-    async def fetch_order_book(self, symbol, params={}):
-        orderbook = await self.publicGetFutureDepth(self.extend({
-            'symbol': self.market_id(symbol),
-            'contract_type': 'this_week', # next_week, quarter
-        }, params))
-        timestamp = self.milliseconds()
-        return {
-            'bids': orderbook['bids'],
-            'asks': self.sort_by(orderbook['asks'], 0),
-            'timestamp': timestamp,
-            'datetime': self.iso8601(timestamp),
-        }
-
-    async def fetch_ticker(self, symbol, params={}):
-        market = self.market(symbol)
-        response = await self.publicGetFutureTicker(self.extend({
-            'symbol': market['id'],
-            'contract_type': 'this_week', # next_week, quarter
-        }, params))
-        timestamp = int(response['date']) * 1000
-        ticker = self.extend(response['ticker'], {'timestamp': timestamp})
-        return self.parse_ticker(ticker, market)
-
-    async def fetch_trades(self, symbol, params={}):
-        market = self.market(symbol)
-        response = await self.publicGetFutureTrades(self.extend({
-            'symbol': market['id'],
-            'contract_type': 'this_week', # next_week, quarter
-        }, params))
-        return self.parse_trades(response, market)
-
-    async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
-        market = self.market(symbol)
-        request = {
-            'symbol': market['id'],
-            'contract_type': 'this_week', # next_week, quarter
-            'type': self.timeframes[timeframe],
-            'since': since,
-        }
-        if limit:
-            request['size'] = int(limit)
-        if since:
-            request['since'] = since
-        else:
-            request['since'] = self.milliseconds() - 86400000 # last 24 hours
-        response = await self.publicGetFutureKline(self.extend(request, params))
-        return self.parse_ohlcvs(response, market, timeframe, since, limit)
-
-    async def create_order(self, symbol, type, side, amount, price=None, params={}):
-        orderType = '1' if(side == 'buy') else '2'
-        order = {
-            'symbol': self.market_id(symbol),
-            'type': orderType,
-            'contract_type': 'this_week', # next_week, quarter
-            'match_price': 0, # match best counter party price? 0 or 1, ignores price if 1
-            'lever_rate': 10, # leverage rate value: 10 or 20(10 by default)
-            'price': price,
-            'amount': amount,
-        }
-        response = await self.privatePostFutureTrade(self.extend(order, params))
-        return {
-            'info': response,
-            'id': str(response['order_id']),
-        }
-
-    async def cancel_order(self, id, params={}):
+    def cancel_order(self, id, params={}):
         return self.privatePostFutureCancel(self.extend({
             'order_id': id,
         }, params))
@@ -13920,6 +14563,7 @@ class paymium (Exchange):
             'countries': ['FR', 'EU'],
             'rateLimit': 2000,
             'version': 'v1',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27790564-a945a9d4-5ff9-11e7-9d2d-b635763f2f24.jpg',
                 'api': 'https://paymium.com/api',
@@ -14093,7 +14737,8 @@ class poloniex (Exchange):
             'id': 'poloniex',
             'name': 'Poloniex',
             'countries': 'US',
-            'rateLimit': 500, # 6 calls per second
+            'rateLimit': 500, # up 6 calls per second
+            'hasCORS': True,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766817-e9456312-5ee6-11e7-9b3c-b628ca5626a5.jpg',
@@ -14106,6 +14751,7 @@ class poloniex (Exchange):
                     'https://poloniex.com/support/api/',
                     'http://pastebin.com/dMX7mZE0',
                 ],
+                'fees': 'https://poloniex.com/fees',
             },
             'api': {
                 'public': {
@@ -14152,9 +14798,25 @@ class poloniex (Exchange):
                     ],
                 },
             },
+            'fees': {
+                'trading': {
+                    'maker': 0.0015,
+                    'taker': 0.0025,
+                },
+                'funding': 0.0,
+            },
         }
         params.update(config)
         super(poloniex, self).__init__(params)
+
+    def calculate_fee_rate(self, symbol, type, side, amount, price, fee='taker', params={}):
+        result = {
+            'base': 0.0,
+            'quote': 0.0,
+        }
+        key = 'quote' if(side == 'sell') else 'base'
+        result[key] = self.markets[symbol][fee]
+        return result
 
     async def fetch_markets(self):
         markets = await self.publicGetReturnTicker()
@@ -14165,13 +14827,13 @@ class poloniex (Exchange):
             market = markets[id]
             quote, base = id.split('_')
             symbol = base + '/' + quote
-            result.append({
+            result.append(self.extend(self.fees['trading'], {
                 'id': id,
                 'symbol': symbol,
                 'base': base,
                 'quote': quote,
                 'info': market,
-            })
+            }))
         return result
 
     async def fetch_balance(self, params={}):
@@ -14192,6 +14854,16 @@ class poloniex (Exchange):
             account['total'] = self.sum(account['free'], account['used'])
             result[currency] = account
         return result
+
+    async def fetchFees(self, params={}):
+        await self.load_markets()
+        fees = await self.privatePostReturnFeeInfo()
+        return {
+            'info': fees,
+            'maker': float(fees['makerFee']),
+            'taker': float(fees['takerFee']),
+            'withdraw': 0.0,
+        }
 
     async def fetch_order_book(self, market, params={}):
         await self.load_markets()
@@ -14455,6 +15127,7 @@ class quadrigacx (Exchange):
             'countries': 'CA',
             'rateLimit': 1000,
             'version': 'v2',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766825-98a6d0de-5ee7-11e7-9fa4-38e11a2c6f52.jpg',
                 'api': 'https://api.quadrigacx.com',
@@ -14600,7 +15273,6 @@ class quadrigacx (Exchange):
             body = self.json(query)
             headers = {
                 'Content-Type': 'application/json',
-                'Content-Length': len(body),
             }
         response = await self.fetch(url, method, headers, body)
         if 'error' in response:
@@ -14619,6 +15291,7 @@ class quoine (Exchange):
             'version': '2',
             'rateLimit': 1000,
             'hasFetchTickers': True,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766844-9615a4e8-5ee8-11e7-8814-fcd004db8cdd.jpg',
                 'api': 'https://api.quoine.com',
@@ -14846,6 +15519,7 @@ class southxchange (Exchange):
             'countries': 'AR', # Argentina
             'rateLimit': 1000,
             'hasFetchTickers': True,
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27838912-4f94ec8a-60f6-11e7-9e5d-bbf9bd50a559.jpg',
                 'api': 'https://www.southxchange.com/api',
@@ -14924,43 +15598,23 @@ class southxchange (Exchange):
 
     def parse_ticker(self, ticker, market):
         timestamp = self.milliseconds()
-        bid = None
-        ask = None
-        last = None
-        change = None
-        volume = None
-        if 'Bid' in ticker:
-            if ticker['Bid']:
-                bid = float(ticker['Bid'])
-        if 'Ask' in ticker:
-            if ticker['Ask']:
-                ask = float(ticker['Ask'])
-        if 'Last' in ticker:
-            if ticker['Last']:
-                last = float(ticker['Last'])
-        if 'Variation24Hr' in ticker:
-            if ticker['Variation24Hr']:
-                change = float(ticker['Variation24Hr'])
-        if 'Volume24Hr' in ticker:
-            if ticker['Volume24Hr']:
-                volume = float(ticker['Volume24Hr'])
         return {
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
             'high': None,
             'low': None,
-            'bid': bid,
-            'ask': ask,
+            'bid': self.safe_float(ticker, 'Bid'),
+            'ask': self.safe_float(ticker, 'Ask'),
             'vwap': None,
             'open': None,
             'close': None,
             'first': None,
-            'last': last,
-            'change': change,
+            'last': self.safe_float(ticker, 'Last'),
+            'change': self.safe_float(ticker, 'Variation24Hr'),
             'percentage': None,
             'average': None,
             'baseVolume': None,
-            'quoteVolume': volume,
+            'quoteVolume': self.safe_float(ticker, 'Volume24Hr'),
             'info': ticker,
         }
 
@@ -15060,6 +15714,7 @@ class surbitcoin (blinktrade):
             'id': 'surbitcoin',
             'name': 'SurBitcoin',
             'countries': 'VE',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27991511-f0a50194-6481-11e7-99b5-8f02932424cc.jpg',
                 'api': {
@@ -15088,6 +15743,7 @@ class therock (Exchange):
             'countries': 'MT',
             'rateLimit': 1000,
             'version': 'v1',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766869-75057fa2-5ee9-11e7-9a6f-13e641fa4707.jpg',
@@ -15303,6 +15959,7 @@ class urdubit (blinktrade):
             'id': 'urdubit',
             'name': 'UrduBit',
             'countries': 'PK',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27991453-156bf3ae-6480-11e7-82eb-7295fe1b5bb4.jpg',
                 'api': {
@@ -15331,6 +15988,7 @@ class vaultoro (Exchange):
             'countries': 'CH',
             'rateLimit': 1000,
             'version': '1',
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766880-f205e870-5ee9-11e7-8fe2-0d5b15880752.jpg',
                 'api': 'https://api.vaultoro.com',
@@ -15520,6 +16178,7 @@ class vbtc (blinktrade):
             'id': 'vbtc',
             'name': 'VBTC',
             'countries': 'VN',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27991481-1f53d1d8-6481-11e7-884e-21d17e7939db.jpg',
                 'api': {
@@ -15547,6 +16206,7 @@ class virwox (Exchange):
             'name': 'VirWoX',
             'countries': ['AT', 'EU'],
             'rateLimit': 1000,
+            'hasCORS': True,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766894-6da9d360-5eea-11e7-90aa-41f2711b7405.jpg',
                 'api': {
@@ -15644,7 +16304,7 @@ class virwox (Exchange):
 
     async def fetchBestPrices(self, symbol):
         await self.load_markets()
-        return self.publicPostGetBestPrices({
+        return await self.publicPostGetBestPrices({
             'symbols': [symbol],
         })
 
@@ -15696,7 +16356,7 @@ class virwox (Exchange):
 
     async def fetch_trades(self, market, params={}):
         await self.load_markets()
-        return self.publicGetRawTradeData(self.extend({
+        return await self.publicGetRawTradeData(self.extend({
             'instrument': market,
             'timespan': 3600,
         }, params))
@@ -15716,8 +16376,7 @@ class virwox (Exchange):
             'id': str(response['orderID']),
         }
 
-    async def cancel_order(self, id, params={}):
-        await self.load_markets()
+    def cancel_order(self, id, params={}):
         return self.privatePostCancelOrder(self.extend({
             'orderID': id,
         }, params))
@@ -15750,6 +16409,59 @@ class virwox (Exchange):
 
 #------------------------------------------------------------------------------
 
+class wex (liqui):
+
+    def __init__(self, config={}):
+        params = {
+            'id': 'wex',
+            'name': 'WEX',
+            'countries': 'NZ', # New Zealand
+            'version': '3',
+            'hasFetchTickers': True,
+            'hasCORS': False,
+            'urls': {
+                'logo': 'https://user-images.githubusercontent.com/1294454/30652751-d74ec8f8-9e31-11e7-98c5-71469fcef03e.jpg',
+                'api': {
+                    'public': 'https://wex.nz/api',
+                    'private': 'https://wex.nz/tapi',
+                },
+                'www': 'https://wex.nz',
+                'doc': [
+                    'https://wex.nz/api/3/docs',
+                    'https://wex.nz/tapi/docs',
+                ],
+            },
+            'api': {
+                'public': {
+                    'get': [
+                        'info',
+                        'ticker/{pair}',
+                        'depth/{pair}',
+                        'trades/{pair}',
+                    ],
+                },
+                'private': {
+                    'post': [
+                        'getInfo',
+                        'Trade',
+                        'ActiveOrders',
+                        'OrderInfo',
+                        'CancelOrder',
+                        'TradeHistory',
+                        'TransHistory',
+                        'CoinDepositAddress',
+                        'WithdrawCoin',
+                        'CreateCoupon',
+                        'RedeemCoupon',
+                    ],
+                }
+            },
+        }
+        params.update(config)
+        super(wex, self).__init__(params)
+
+#------------------------------------------------------------------------------
+
 class xbtce (Exchange):
 
     def __init__(self, config={}):
@@ -15760,6 +16472,7 @@ class xbtce (Exchange):
             'rateLimit': 2000, # responses are cached every 2 seconds
             'version': 'v1',
             'hasPublicAPI': False,
+            'hasCORS': False,
             'hasFetchTickers': True,
             'hasFetchOHLCV': False,
             'urls': {
@@ -15967,7 +16680,7 @@ class xbtce (Exchange):
     async def fetch_trades(self, symbol, params={}):
         await self.load_markets()
         # no method for trades?
-        return self.privateGetTrade(params)
+        return await self.privateGetTrade(params)
 
     def parse_ohlcv(self, ohlcv, market=None, timeframe='1m', since=None, limit=None):
         return [
@@ -16012,8 +16725,7 @@ class xbtce (Exchange):
             'id': str(response['Id']),
         }
 
-    async def cancel_order(self, id, params={}):
-        await self.load_markets()
+    def cancel_order(self, id, params={}):
         return self.privateDeleteTrade(self.extend({
             'Type': 'Cancel',
             'Id': id,
@@ -16063,6 +16775,7 @@ class yobit (Exchange):
             'countries': 'RU',
             'rateLimit': 2000, # responses are cached every 2 seconds
             'version': '3',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766910-cdcbfdae-5eea-11e7-9859-03fea873272d.jpg',
                 'api': 'https://yobit.net',
@@ -16219,8 +16932,7 @@ class yobit (Exchange):
             'id': str(response['return']['order_id']),
         }
 
-    async def cancel_order(self, id, params={}):
-        await self.load_markets()
+    def cancel_order(self, id, params={}):
         return self.tapiPostCancelOrder(self.extend({
             'order_id': id,
         }, params))
@@ -16269,6 +16981,7 @@ class yunbi (acx):
             'countries': 'CN',
             'rateLimit': 1000,
             'version': 'v2',
+            'hasCORS': False,
             'hasFetchTickers': True,
             'hasFetchOHLCV': True,
             'timeframes': {
@@ -16342,6 +17055,7 @@ class zaif (Exchange):
             'countries': 'JP',
             'rateLimit': 2000,
             'version': '1',
+            'hasCORS': False,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766927-39ca2ada-5eeb-11e7-972f-1b4199518ca6.jpg',
                 'api': 'https://api.zaif.jp',
@@ -16512,8 +17226,7 @@ class zaif (Exchange):
             'id': str(response['return']['order_id']),
         }
 
-    async def cancel_order(self, id, params={}):
-        await self.load_markets()
+    def cancel_order(self, id, params={}):
         return self.privatePostCancelOrder(self.extend({
             'order_id': id,
         }, params))
@@ -16610,7 +17323,6 @@ class zaif (Exchange):
             }, params))
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': len(body),
                 'Key': self.apiKey,
                 'Sign': self.hmac(self.encode(body), self.encode(self.secret), hashlib.sha512),
             }

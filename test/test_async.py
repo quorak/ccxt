@@ -1,11 +1,27 @@
 # -*- coding: utf-8 -*-
 
-import ccxt
-import time
-import json
-
 import argparse
+import asyncio
+import os
+import sys
+import json
+import time
 
+# ------------------------------------------------------------------------------
+
+root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(root)
+
+# ------------------------------------------------------------------------------
+
+import ccxt.async as ccxt
+
+# ------------------------------------------------------------------------------
+
+from os         import _exit
+from traceback  import format_tb
+
+# ------------------------------------------------------------------------------
 
 class Argv (object):
     pass
@@ -14,6 +30,7 @@ class Argv (object):
 argv = Argv()
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--verbose', action='store_true', help='enable verbose output')
 parser.add_argument('--nonce', type=int, help='integer')
 parser.add_argument('exchange', type=str, help='exchange id in lowercase', nargs='?')
 parser.add_argument('symbol', type=str, help='symbol in uppercase', nargs='?')
@@ -37,13 +54,28 @@ def underline(s): return style(s, '\033[4m')
 def dump(*args):
     print(' '.join([str(arg) for arg in args]))
 
+# print a n error string
+def dump_error(*args):
+    string = ' '.join([str(arg) for arg in args])
+    print(string)
+    sys.stderr.write(string + "\n")
+
 # ------------------------------------------------------------------------------
 
-def test_exchange_symbol_orderbook(exchange, symbol):
+def handle_all_unhandled_exceptions(type, value, traceback):
+
+    dump_error(yellow(type, value, '\n\n' + '\n'.join(format_tb(traceback))))
+    _exit(1) # unrecoverable crash
+
+sys.excepthook = handle_all_unhandled_exceptions
+
+# ------------------------------------------------------------------------------
+
+async def test_exchange_symbol_orderbook(exchange, symbol):
     delay = int(exchange.rateLimit / 1000)
     time.sleep(delay)
     dump(green(exchange.id), green(symbol), 'fetching order book...')
-    orderbook = exchange.fetch_order_book(symbol)
+    orderbook = await exchange.fetch_order_book(symbol)
     dump(
         green(exchange.id),
         green(symbol),
@@ -56,34 +88,34 @@ def test_exchange_symbol_orderbook(exchange, symbol):
 
 # ------------------------------------------------------------------------------
 
-def test_exchange_symbol_ohlcv(exchange, symbol):
+async def test_exchange_symbol_ohlcv(exchange, symbol):
     delay = int(exchange.rateLimit / 1000)
     time.sleep(delay)
     if exchange.hasFetchOHLCV:
-        ohlcvs = exchange.fetch_ohlcv(symbol)
+        ohlcvs = await exchange.fetch_ohlcv(symbol)
         dump(green(exchange.id), 'fetched', green(len(ohlcvs)), 'OHLCVs')
     else:
         dump(yellow(exchange.id), 'fetching OHLCV not supported')
 
 # ------------------------------------------------------------------------------
 
-def test_exchange_all_tickers(exchange):
+async def test_exchange_all_tickers(exchange):
     delay = int(exchange.rateLimit / 1000)
     time.sleep(delay)
     dump(green(exchange.id), 'fetching all tickers at once...')
     if exchange.hasFetchTickers:
-        tickers = exchange.fetch_tickers()
+        tickers = await exchange.fetch_tickers()
         dump(green(exchange.id), 'fetched', green(len(list(tickers.keys()))), 'tickers')
     else:
         dump(yellow(exchange.id), 'fetching all tickers at once not supported')
 
 # ------------------------------------------------------------------------------
 
-def test_exchange_symbol_ticker(exchange, symbol):
+async def test_exchange_symbol_ticker(exchange, symbol):
     delay = int(exchange.rateLimit / 1000)
     time.sleep(delay)
     dump(green(exchange.id), green(symbol), 'fetching ticker...')
-    ticker = exchange.fetch_ticker(symbol)
+    ticker = await exchange.fetch_ticker(symbol)
     dump(
         green(exchange.id),
         green(symbol),
@@ -97,40 +129,40 @@ def test_exchange_symbol_ticker(exchange, symbol):
 
 # ------------------------------------------------------------------------------
 
-def test_exchange_symbol_trades(exchange, symbol):
+async def test_exchange_symbol_trades(exchange, symbol):
 
     delay = int(exchange.rateLimit / 1000)
     time.sleep(delay)
     dump(green(exchange.id), green(symbol), 'fetching trades...')
     try:
-        trades = exchange.fetch_trades(symbol)
+        trades = await exchange.fetch_trades(symbol)
         dump(green(exchange.id), green(symbol), 'fetched', green(len(list(trades))), 'trades')
     except ccxt.ExchangeError as e:
-        dump(yellow(type(e).__name__), e.args)
+        dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
     except ccxt.NotSupported as e:
-        dump(yellow(type(e).__name__), e.args)
+        dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
 
 # ------------------------------------------------------------------------------
 
-def test_exchange_symbol(exchange, symbol):
+async def test_exchange_symbol(exchange, symbol):
     dump(green('SYMBOL: ' + symbol))
-    test_exchange_symbol_ticker(exchange, symbol)
+    await test_exchange_symbol_ticker(exchange, symbol)
 
     if exchange.id == 'coinmarketcap':
-        dump(green(exchange.fetchGlobal()))
+        dump(green(await exchange.fetchGlobal()))
     else:
-        test_exchange_symbol_orderbook(exchange, symbol)
-        test_exchange_symbol_trades(exchange, symbol)
+        await test_exchange_symbol_orderbook(exchange, symbol)
+        await test_exchange_symbol_trades(exchange, symbol)
 
-    test_exchange_all_tickers(exchange)
-    test_exchange_symbol_ohlcv(exchange, symbol)
+    await test_exchange_all_tickers(exchange)
+    await test_exchange_symbol_ohlcv(exchange, symbol)
 
 # ------------------------------------------------------------------------------
 
-def load_exchange(exchange):
-    exchange.load_markets()
+async def load_exchange(exchange):
+    await exchange.load_markets()
 
-def test_exchange(exchange):
+async def test_exchange(exchange):
 
     dump(green('EXCHANGE: ' + exchange.id))
     # delay = 2
@@ -157,7 +189,7 @@ def test_exchange(exchange):
             break
 
     if symbol.find('.d') < 0:
-        test_exchange_symbol(exchange, symbol)
+        await test_exchange_symbol(exchange, symbol)
 
     # ..........................................................................
     # private API
@@ -166,16 +198,16 @@ def test_exchange(exchange):
         return
 
     dump(green(exchange.id), 'fetching balance...')
-    balance = exchange.fetch_balance()
-    dump(green(exchange.id), 'balance', balance)
+    balance = await exchange.fetch_balance()
+    dump(green(exchange.id), 'fetched balance')
 
     if exchange.hasFetchOrders:
         try:
             dump(green(exchange.id), 'fetching orders...')
-            orders = exchange.fetch_orders()
+            orders = await exchange.fetch_orders()
             dump(green(exchange.id), 'fetched', green(str(len(orders))), 'orders')
         except (ccxt.ExchangeError, ccxt.NotSupported) as e:
-            dump(yellow(type(e).__name__), e.args)
+            dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
         # except ccxt.NotSupported as e:
         #     dump(yellow(type(e).__name__), e.args)
 
@@ -202,7 +234,7 @@ def test_exchange(exchange):
 
 # ------------------------------------------------------------------------------
 
-def try_all_proxies(exchange, proxies):
+async def try_all_proxies(exchange, proxies):
     current_proxy = 0
     max_retries = len(proxies)
     # a special case for ccex
@@ -212,21 +244,21 @@ def try_all_proxies(exchange, proxies):
         try:
             exchange.proxy = proxies[current_proxy]
             current_proxy = (current_proxy + 1) % len(proxies)
-            load_exchange(exchange)
-            test_exchange(exchange)
+            await load_exchange(exchange)
+            await test_exchange(exchange)
             break
         except ccxt.RequestTimeout as e:
-            dump(yellow(type(e).__name__), str(e))
+            dump_error(yellow('[' + type(e).__name__ + ']'), str(e))
         except ccxt.NotSupported as e:
-            dump(yellow(type(e).__name__), e.args)
+            dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
         except ccxt.DDoSProtection as e:
-            dump(yellow(type(e).__name__), e.args)
+            dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
         except ccxt.ExchangeNotAvailable as e:
-            dump(yellow(type(e).__name__), e.args)
+            dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
         except ccxt.AuthenticationError as e:
-            dump(yellow(type(e).__name__), str(e))
+            dump_error(yellow('[' + type(e).__name__ + ']'), str(e))
         except ccxt.ExchangeError as e:
-            dump(yellow(type(e).__name__), e.args)
+            dump_error(yellow('[' + type(e).__name__ + ']'), e.args)
 
 # ------------------------------------------------------------------------------
 
@@ -244,7 +276,7 @@ with open('./keys.json') as file:
 # instantiate all exchanges
 for id in ccxt.exchanges:
     exchange = getattr(ccxt, id)
-    exchanges[id] = exchange({'verbose': False})
+    exchanges[id] = exchange({'verbose': argv.verbose})
 
 # set up api keys appropriately
 tuples = list(ccxt.Exchange.keysort(config).items())
@@ -259,21 +291,27 @@ exchanges['gdax'].urls['api'] = 'https://api-public.sandbox.gdax.com'
 
 # ------------------------------------------------------------------------------
 
-if argv.exchange:
+async def main():
 
-    exchange = exchanges[argv.exchange]
-    symbol = argv.symbol
+    if argv.exchange:
 
-    if symbol:
-        load_exchange(exchange)
-        test_exchange_symbol(exchange, symbol)
+        exchange = exchanges[argv.exchange]
+        symbol = argv.symbol
+
+        if symbol:
+            await load_exchange(exchange)
+            await test_exchange_symbol(exchange, symbol)
+        else:
+            await try_all_proxies(exchange, proxies)
+
     else:
-        try_all_proxies(exchange, proxies)
 
-else:
+        tuples = list(ccxt.Exchange.keysort(exchanges).items())
+        for (id, params) in tuples:
+            if id in exchanges:
+                exchange = exchanges[id]
+                await try_all_proxies(exchange, proxies)
 
-    tuples = list(ccxt.Exchange.keysort(exchanges).items())
-    for (id, params) in tuples:
-        if id in exchanges:
-            exchange = exchanges[id]
-            try_all_proxies(exchange, proxies)
+# ------------------------------------------------------------------------------
+
+asyncio.get_event_loop().run_until_complete(main())
