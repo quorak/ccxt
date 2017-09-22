@@ -5312,6 +5312,7 @@ var bitstamp = {
                 'open_orders/all/',
                 'open_orders/{pair}',
                 'cancel_order/',
+                'order_status',
                 'buy/{pair}/',
                 'buy/market/{pair}/',
                 'sell/{pair}/',
