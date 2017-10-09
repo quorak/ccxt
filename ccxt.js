@@ -3205,6 +3205,16 @@ var bitfinex = {
             if (base == 'DSH')
                 base = 'DASH';
             let symbol = base + '/' + quote;
+
+            let amountLimits = {
+                'min': market['minimum_order_size'],
+                'max': market['maximum_order_size']
+            };
+
+            let limits = {
+                'amount': amountLimits
+            };
+
             result.push ({
                 'id': id,
                 'symbol': symbol,
@@ -3213,6 +3223,7 @@ var bitfinex = {
                 'baseId': baseId,
                 'quoteId': quoteId,
                 'info': market,
+                'limits': limits
             });
         }
         return result;
