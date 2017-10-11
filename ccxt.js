@@ -573,7 +573,7 @@ const Exchange = function (config) {
         lastRestRequestTimestamp = this.milliseconds ()
 
         let promise =
-            fetch (url, { 'method': method, 'headers': headers, 'body': body })
+            fetch (url, { 'method': method, 'headers': headers, 'body': body, 'agent': this.tunnelAgent || null })
                 .catch (e => {
                     if (isNode)
                         throw new ExchangeNotAvailable ([ this.id, method, url, e.type, e.message ].join (' '))
