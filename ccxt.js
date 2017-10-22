@@ -5902,7 +5902,7 @@ var bitstamp = {
             throw new ExchangeError("unknown order status")
         }
 
-        let price = order.transactions.map(t=>t.price) / order.transactions.length ;
+        let price = order.transactions.reduce((sum,t) => sum + t.price, 0) / order.transactions.length ;
         let timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2), Date.now());
         let type = order.transactions.length > 0 ? order.transactions.map(t => ["deposit","withdrawal","market"][t["type"]])[0] : "unknown";
 
