@@ -5902,7 +5902,7 @@ var bitstamp = {
             throw new ExchangeError("unknown order status")
         }
 
-        let price = order.transactions.reduce((sum,t) => sum + t.price, 0) / order.transactions.length ;
+        let price = order.transactions.reduce((sum,t) => sum + parseFloat(t.price), 0) / order.transactions.length ;
         let timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2), Date.now());
         let type = order.transactions.length > 0 ? order.transactions.map(t => ["deposit","withdrawal","market"][t["type"]])[0] : "unknown";
 
@@ -15110,6 +15110,8 @@ var kraken = {
                 for (let i = 0; i < response['error'].length; i++) {
                     if (response['error'][i] == 'EService:Unavailable')
                         throw new ExchangeNotAvailable (this.id + ' ' + this.json (response));
+                    if (response['error'][i] == 'EOrder:Insufficient funds')
+                        throw new InsufficientFunds (this.id + ' ' + this.json (response));
                 }
                 throw new ExchangeError (this.id + ' ' + this.json (response));
             }
