@@ -155,6 +155,48 @@ module.exports = class bitstamp extends Exchange {
         };
     }
 
+    parseMyTrade (trade, market = undefined) {
+        let timestamp = undefined;
+        if ('date' in trade) {
+            timestamp = parseInt (trade['date']) * 1000;
+        } else if ('datetime' in trade) {
+            timestamp = this.parse8601 (trade['datetime']);
+        }
+        let side = (trade['type'] == 0) ? 'buy' : 'sell';
+        let order = undefined;
+        let currency_pair = undefined
+
+        if ('order_id' in trade)
+            order = trade['order_id'].toString ();
+
+        if(market == undefined){
+            for(let key in trade){
+                let key_as_market_id = key.replace('_','')
+                if(this.markets_by_id[key_as_market_id] != undefined){
+                    currency_pair=key
+                    market = this.markets_by_id[key_as_market_id];
+                    break;
+                }
+            }
+        }else{
+            currency_pair = market['base'].toLowerCase()+'_'+market['quote'].toLowerCase()
+        }
+        let price = trade[currency_pair]
+        let amount = trade[market.quote.toLowerCase()]
+        return {
+            'id': trade['id'].toString(),
+            'info': trade,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'symbol': market['symbol'],
+            'order': order,
+            'type': undefined,
+            'side': side,
+            'price': parseFloat (price),
+            'amount': parseFloat (amount),
+        };
+    }
+
     async fetchTrades (symbol, since = undefined, limit = undefined, params = {}) {
         let market = this.market (symbol);
         let response = await this.publicGetTransactionsPair (this.extend ({
@@ -162,6 +204,26 @@ module.exports = class bitstamp extends Exchange {
             'time': 'minute',
         }, params));
         return this.parseTrades (response, market);
+    }
+
+    async fetchMyTrades (symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        let response = undefined
+        let market = undefined
+        if(symbol == undefined){
+            await this.loadMarkets ();
+            response = await this.privatePostUserTransactions (this.extend ({
+                'limit': limit
+            }, params));
+        }else{
+            await this.loadMarkets ();
+            market = this.market (symbol);
+            console.log(market)
+            response = await this.privatePostUserTransactionsPair (this.extend ({
+                'pair': market['id'],
+                'limit': limit
+            }, params));
+        }
+        return Object.values (response).map (trade => this.parseMyTrade (trade, market))
     }
 
     async fetchBalance (params = {}) {
@@ -219,17 +281,6 @@ module.exports = class bitstamp extends Exchange {
         await this.loadMarkets ();
         let response = await this.privatePostOrderStatus ({ 'id': id });
         return this.parseOrderStatus (response);
-    }
-
-    async fetchMyTrades (symbol = undefined, since = undefined, limit = undefined, params = {}) {
-        await this.loadMarkets ();
-        let market = undefined;
-        if (symbol)
-            market = this.market (symbol);
-        let pair = market ? market['id'] : 'all';
-        let request = this.extend ({ 'pair': pair }, params);
-        let response = await this.privatePostOpenOrdersPair (request);
-        return this.parseTrades (response, market);
     }
 
     parseOrder (order) {
