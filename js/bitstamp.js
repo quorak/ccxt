@@ -155,6 +155,48 @@ module.exports = class bitstamp extends Exchange {
         };
     }
 
+    parseMyTrade (trade, market = undefined) {
+        let timestamp = undefined;
+        if ('date' in trade) {
+            timestamp = parseInt (trade['date']) * 1000;
+        } else if ('datetime' in trade) {
+            timestamp = this.parse8601 (trade['datetime']);
+        }
+        let side = (trade['type'] == 0) ? 'buy' : 'sell';
+        let order = undefined;
+        let currency_pair = undefined
+
+        if ('order_id' in trade)
+            order = trade['order_id'].toString ();
+
+        if(market == undefined){
+            for(let key in trade){
+                let key_as_market_id = key.replace('_','')
+                if(this.markets_by_id[key_as_market_id] != undefined){
+                    currency_pair=key
+                    market = this.markets_by_id[key_as_market_id];
+                    break;
+                }
+            }
+        }else{
+            currency_pair = market['base'].toLowerCase()+'_'+market['quote'].toLowerCase()
+        }
+        let price = trade[currency_pair]
+        let amount = trade[market.quote.toLowerCase()]
+        return {
+            'id': trade['id'].toString(),
+            'info': trade,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'symbol': market['symbol'],
+            'order': order,
+            'type': undefined,
+            'side': side,
+            'price': parseFloat (price),
+            'amount': parseFloat (amount),
+        };
+    }
+
     async fetchTrades (symbol, since = undefined, limit = undefined, params = {}) {
         let market = this.market (symbol);
         let response = await this.publicGetTransactionsPair (this.extend ({
@@ -162,6 +204,25 @@ module.exports = class bitstamp extends Exchange {
             'time': 'minute',
         }, params));
         return this.parseTrades (response, market);
+    }
+
+    async fetchMyTrades (symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        let response = undefined
+        let market = undefined
+        if(symbol == undefined){
+            await this.loadMarkets ();
+            response = await this.privatePostUserTransactions (this.extend ({
+                'limit': limit
+            }, params));
+        }else{
+            await this.loadMarkets ();
+            market = this.market (symbol);
+            response = await this.privatePostUserTransactionsPair (this.extend ({
+                'pair': market['id'],
+                'limit': limit
+            }, params));
+        }
+        return Object.values (response).map (trade => this.parseMyTrade (trade, market))
     }
 
     async fetchBalance (params = {}) {
@@ -221,17 +282,6 @@ module.exports = class bitstamp extends Exchange {
         return this.parseOrderStatus (response);
     }
 
-    async fetchMyTrades (symbol = undefined, since = undefined, limit = undefined, params = {}) {
-        await this.loadMarkets ();
-        let market = undefined;
-        if (symbol)
-            market = this.market (symbol);
-        let pair = market ? market['id'] : 'all';
-        let request = this.extend ({ 'pair': pair }, params);
-        let response = await this.privatePostOpenOrdersPair (request);
-        return this.parseTrades (response, market);
-    }
-
     parseOrder (order) {
         let statusCode = order['status'];
         let status = undefined;
@@ -243,20 +293,47 @@ module.exports = class bitstamp extends Exchange {
             throw new ExchangeError("unknown order status")
         }
 
-        let price = order.transactions.reduce((sum,t) => sum + parseFloat(t.price), 0) / order.transactions.length ;
-        let timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2), Date.now());
-        let type = order.transactions.length > 0 ? order.transactions.map(t => ["deposit","withdrawal","market"][t["type"]])[0] : "unknown";
+        let price = undefined
+        let type = undefined
+        let timestamp = undefined
+        let amount = undefined
+        let side = undefined
+        let symbol = undefined
+        let market = undefined
+        if(order.transactions.length > 0){
+            let t = Object.assign({}, order.transactions[0])
+            price = order.transactions.reduce((sum,t) => sum + parseFloat(t.price), 0) / order.transactions.length ;
+            delete t.price
+            timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2), Date.now());
+            delete t.datetime
+            type = ["deposit","withdrawal","market"][t["type"]]
+            delete t.type
+            delete t.fee
+            delete t.tid
+
+            let quoteAndBase = Object.keys(t)
+            if(quoteAndBase.length > 2) throw new ExchangeError('unexpected new variable in transaction object' + quoteAndBase.join(' '))
+            market = this.markets_by_id[quoteAndBase[0]+quoteAndBase[1]] || this.markets_by_id[quoteAndBase[1]+quoteAndBase[0]]
+            if(!market) throw new ExchangeError('Market not found for' + quoteAndBase.join(' '))
+            symbol = market['symbol']
+
+            amount = order.transactions.reduce((sum,t2) => sum + parseFloat(t2[market['base'].toLowerCase()]), 0);
+
+            // side = amount < 0 ? 'sell' : 'buy'
+            // Unfotunately, we cannot tell the side,
+            // as the value is always positive despite of buy or sell
+        }
 
         let result = {
             'info': order,
             'id': order['id'],
-            //'symbol': market['symbol'],
+            'symbol': symbol,
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
             'type': type,
-            //'side': order['type'],
+            //'side': side,
             'price': price,
-            //'amount': order['start_amount'],
+            'amount': amount,
             //'remaining': order['amount'],
             'status': status,
         };
