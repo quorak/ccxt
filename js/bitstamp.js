@@ -330,15 +330,17 @@ module.exports = class bitstamp extends Exchange {
         return this.parseOrderStatus (response);
     }
 
-    parseOrder (order) {
+    parseOrder (order,market) {
         let statusCode = order['status'];
         let status = undefined;
         if (statusCode == 'Queue' || statusCode == 'Open') {
             status = 'open';
         } else if (statusCode == "Finished") {
             status = 'closed';
+        } else if (statusCode == "Canceled") {
+            status = 'canceled';
         } else {
-            throw new ExchangeError("unknown order status")
+            throw new ExchangeError("unknown order status "+statusCode)
         }
 
         let price = undefined
@@ -347,30 +349,58 @@ module.exports = class bitstamp extends Exchange {
         let amount = undefined
         let side = undefined
         let symbol = undefined
-        let market = undefined
+        let filled = 0
+        let remaining = undefined
+
+        if(order['type'] != undefined)
+            side = (order['type'] == 0) ? 'buy' : 'sell' ;
+
+        // amount is only set, if the userer passes additional infos via createOrderResponse
+        if(order['amount'] != undefined)
+            amount = order['amount']
+
+        if(order['price'] != undefined)
+            price = order['price']
+
         if(order.transactions.length > 0){
             let t = Object.assign({}, order.transactions[0])
-            price = order.transactions.reduce((sum,t) => sum + parseFloat(t.price), 0) / order.transactions.length ;
-            delete t.price
-            timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2), Date.now());
-            delete t.datetime
-            type = ["deposit","withdrawal","market"][t["type"]]
-            delete t.type
-            delete t.fee
-            delete t.tid
 
-            let quoteAndBase = Object.keys(t)
-            if(quoteAndBase.length > 2) throw new ExchangeError('unexpected new variable in transaction object' + quoteAndBase.join(' '))
-            market = this.markets_by_id[quoteAndBase[0]+quoteAndBase[1]] || this.markets_by_id[quoteAndBase[1]+quoteAndBase[0]]
+            
+            timestamp = order.transactions.map(t => Date.parse(t.datetime)).reduce ( (t1,t2) => Math.max(t1, t2), Date.now());
+            
+            let transactionType = ["deposit","withdrawal","market"][t["type"]]
+            
+
+            if(!market){
+                // no market has been set. 
+                // Lets try to figure it out, from the keys, set in the transactions
+                delete t.type
+                delete t.fee
+                delete t.tid
+                delete t.datetime
+                delete t.price
+                let quoteAndBase = Object.keys(t)
+                if(quoteAndBase.length > 2) throw new ExchangeError('unexpected new variable in transaction object' + quoteAndBase.join(' '))
+                market = this.markets_by_id[quoteAndBase[0]+quoteAndBase[1]] || this.markets_by_id[quoteAndBase[1]+quoteAndBase[0]]
+            }
             if(!market) throw new ExchangeError('Market not found for' + quoteAndBase.join(' '))
+            
             symbol = market['symbol']
 
-            amount = order.transactions.reduce((sum,t2) => sum + parseFloat(t2[market['base'].toLowerCase()]), 0);
 
-            // side = amount < 0 ? 'sell' : 'buy'
-            // Unfotunately, we cannot tell the side,
-            // as the value is always positive despite of buy or sell
+            filled = order.transactions.reduce((sum,t2) => sum + this.safeFloat (t2, market['base'].toLowerCase()), 0);
+            // corrected price when we have actual transactions
+            price = order.transactions.reduce((sum,t2) => sum + parseFloat(t2.price) * this.safeFloat (t2, market['base'].toLowerCase()), 0) / filled ;
+            
+            // to avoid rounding issues
+            filled = this.amountToPrecision(symbol,filled)
+            price = this.priceToPrecision(symbol,price)
+
         }
+
+
+        if(amount && filled)
+            remaining = amount - filled
 
         let result = {
             'info': order,
@@ -378,21 +408,27 @@ module.exports = class bitstamp extends Exchange {
             'symbol': symbol,
             'timestamp': timestamp,
             'datetime': timestamp ? this.iso8601 (timestamp) : undefined,
-            'type': type,
-            //'side': side,
+            'side': side,
             'price': price,
             'amount': amount,
-            //'remaining': order['amount'],
+            'remaining': remaining,
+            'filled': filled,
             'status': status,
         };
         return result;
     }
 
     async fetchOrder (id, symbol = undefined, params = {}) {
+
         await this.loadMarkets ();
         let response = await this.privatePostOrderStatus ({id:id});
         let order = response;
-        return this.parseOrder (this.extend ({ 'id': id }, order));
+        let market = this.markets[symbol]
+
+        // bitfinex does not send many informations like amount,side, price via the privatePostOrderStatus API
+        // set params.createResponseParameters to the values returned by the create Endpoint, to have a more unified API
+        order = this.extend ({ 'id': id }, params.createOrderResponseRaw || {}, response)
+        return this.parseOrder (this.extend ({ 'id': id }, order), market);
     }
 
     sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
