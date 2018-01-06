@@ -121,8 +121,12 @@ class exmo (Exchange):
         response = await self.publicGetOrderBook(self.extend({
             'pair': market['id'],
         }, params))
-        orderbook = response[market['id']]
-        return self.parse_order_book(orderbook, None, 'bid', 'ask')
+        result = response[market['id']]
+        orderbook = self.parse_order_book(result, None, 'bid', 'ask')
+        return self.extend(orderbook, {
+            'bids': self.sort_by(orderbook['bids'], 0, True),
+            'asks': self.sort_by(orderbook['asks'], 0),
+        })
 
     def parse_ticker(self, ticker, market=None):
         timestamp = ticker['updated'] * 1000
@@ -190,7 +194,7 @@ class exmo (Exchange):
         response = await self.publicGetTrades(self.extend({
             'pair': market['id'],
         }, params))
-        return self.parse_trades(response[market['id']], market)
+        return self.parse_trades(response[market['id']], market, since, limit)
 
     async def create_order(self, symbol, type, side, amount, price=None, params={}):
         await self.load_markets()

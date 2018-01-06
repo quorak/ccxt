@@ -60,7 +60,9 @@ class bter (Exchange):
 
     async def fetch_markets(self):
         response = await self.publicGetMarketinfo()
-        markets = response['pairs']
+        markets = self.safe_value(response, 'pairs')
+        if not markets:
+            raise ExchangeError(self.id + ' fetchMarkets got an unrecognized response')
         result = []
         for i in range(0, len(markets)):
             market = markets[i]
@@ -206,7 +208,7 @@ class bter (Exchange):
         response = await self.publicGetTradeHistoryId(self.extend({
             'id': market['id'],
         }, params))
-        return self.parse_trades(response['data'], market)
+        return self.parse_trades(response['data'], market, since, limit)
 
     async def create_order(self, symbol, type, side, amount, price=None, params={}):
         if type == 'market':

@@ -3,7 +3,7 @@
 //  ---------------------------------------------------------------------------
 
 const Exchange = require ('./base/Exchange')
-const { ExchangeError, InvalidOrder, InsufficientFunds, OrderNotFound } = require ('./base/errors')
+const { ExchangeError, AuthenticationError, InvalidOrder, InsufficientFunds, OrderNotFound, DDoSProtection } = require ('./base/errors')
 
 //  ---------------------------------------------------------------------------
 
@@ -16,6 +16,7 @@ module.exports = class bittrex extends Exchange {
             'countries': 'US',
             'version': 'v1.1',
             'rateLimit': 1500,
+            'hasAlreadyAuthenticatedSuccessfully': false, // a workaround for APIKEY_INVALID
             'hasCORS': false,
             // obsolete metainfo interface
             'hasFetchTickers': true,
@@ -110,15 +111,45 @@ module.exports = class bittrex extends Exchange {
             },
             'fees': {
                 'trading': {
+                    'tierBased': false,
+                    'percentage': true,
                     'maker': 0.0025,
                     'taker': 0.0025,
+                },
+                'funding': {
+                    'tierBased': false,
+                    'percentage': false,
+                    'withdraw': {
+                        'BTC': 0.001,
+                        'LTC': 0.01,
+                        'DOGE': 2,
+                        'VTC': 0.02,
+                        'PPC': 0.02,
+                        'FTC': 0.2,
+                        'RDD': 2,
+                        'NXT': 2,
+                        'DASH': 0.002,
+                        'POT': 0.002,
+                    },
+                    'deposit': {
+                        'BTC': 0,
+                        'LTC': 0,
+                        'DOGE': 0,
+                        'VTC': 0,
+                        'PPC': 0,
+                        'FTC': 0,
+                        'RDD': 0,
+                        'NXT': 0,
+                        'DASH': 0,
+                        'POT': 0,
+                    },
                 },
             },
         });
     }
 
     costToPrecision (symbol, cost) {
-        return this.truncate (parseFloat (cost), this.markets[symbol].precision.price);
+        return this.truncate (parseFloat (cost), this.markets[symbol]['precision']['price']);
     }
 
     feeToPrecision (symbol, fee) {
@@ -140,15 +171,6 @@ module.exports = class bittrex extends Exchange {
                 'amount': 8,
                 'price': 8,
             };
-            let amountLimits = {
-                'min': market['MinTradeSize'],
-                'max': undefined,
-            };
-            let priceLimits = { 'min': undefined, 'max': undefined };
-            let limits = {
-                'amount': amountLimits,
-                'price': priceLimits,
-            };
             let active = market['IsActive'];
             result.push (this.extend (this.fees['trading'], {
                 'id': id,
@@ -159,7 +181,16 @@ module.exports = class bittrex extends Exchange {
                 'info': market,
                 'lot': Math.pow (10, -precision['amount']),
                 'precision': precision,
-                'limits': limits,
+                'limits': {
+                    'amount': {
+                        'min': market['MinTradeSize'],
+                        'max': undefined,
+                    },
+                    'price': {
+                        'min': undefined,
+                        'max': undefined,
+                    },
+                },
             }));
         }
         return result;
@@ -193,9 +224,21 @@ module.exports = class bittrex extends Exchange {
         let response = await this.publicGetOrderbook (this.extend ({
             'market': this.marketId (symbol),
             'type': 'both',
-            'depth': 50,
         }, params));
         let orderbook = response['result'];
+        if ('type' in params) {
+            if (params['type'] == 'buy') {
+                orderbook = {
+                    'buy': response['result'],
+                    'sell': [],
+                };
+            } else if (params['type'] == 'sell') {
+                orderbook = {
+                    'buy': [],
+                    'sell': response['result'],
+                };
+            }
+        }
         return this.parseOrderBook (orderbook, undefined, 'buy', 'sell', 'Rate', 'Quantity');
     }
 
@@ -226,43 +269,46 @@ module.exports = class bittrex extends Exchange {
         };
     }
 
-    async fetchCurrencies () {
-        let response = await this.publicGetCurrencies ();
+    async fetchCurrencies (params = {}) {
+        let response = await this.publicGetCurrencies (params);
         let currencies = response['result'];
-        let result = [];
+        let result = {};
         for (let i = 0; i < currencies.length; i++) {
             let currency = currencies[i];
             let id = currency['Currency'];
-            let precision = {
-                'amount': 8, // default precision, todo: fix "magic constants"
-                'price': 8,
-            };
             // todo: will need to rethink the fees
             // to add support for multiple withdrawal/deposit methods and
             // differentiated fees for each particular method
-            result.push ({
+            let code = this.commonCurrencyCode (id);
+            let precision = 8; // default precision, todo: fix "magic constants"
+            result[code] = {
                 'id': id,
+                'code': code,
                 'info': currency,
                 'name': currency['CurrencyLong'],
-                'code': this.commonCurrencyCode (id),
                 'active': currency['IsActive'],
-                'fees': currency['TxFee'], // todo: redesign
+                'status': 'ok',
+                'fee': currency['TxFee'], // todo: redesign
                 'precision': precision,
                 'limits': {
                     'amount': {
-                        'min': Math.pow (10, -precision['amount']),
-                        'max': Math.pow (10, precision['amount']),
+                        'min': Math.pow (10, -precision),
+                        'max': Math.pow (10, precision),
                     },
                     'price': {
-                        'min': Math.pow (10, -precision['price']),
-                        'max': Math.pow (10, precision['price']),
+                        'min': Math.pow (10, -precision),
+                        'max': Math.pow (10, precision),
                     },
                     'cost': {
                         'min': undefined,
                         'max': undefined,
                     },
+                    'withdraw': {
+                        'min': currency['TxFee'],
+                        'max': Math.pow (10, precision),
+                    },
                 },
-            });
+            };
         }
         return result;
     }
@@ -320,8 +366,8 @@ module.exports = class bittrex extends Exchange {
             'symbol': market['symbol'],
             'type': 'limit',
             'side': side,
-            'price': trade['Price'],
-            'amount': trade['Quantity'],
+            'price': parseFloat (trade['Price']),
+            'amount': parseFloat (trade['Quantity']),
         };
     }
 
@@ -333,7 +379,7 @@ module.exports = class bittrex extends Exchange {
         }, params));
         if ('result' in response) {
             if (typeof response['result'] != 'undefined')
-                return this.parseTrades (response['result'], market);
+                return this.parseTrades (response['result'], market, since, limit);
         }
         throw new ExchangeError (this.id + ' fetchTrades() returned undefined response');
     }
@@ -358,7 +404,11 @@ module.exports = class bittrex extends Exchange {
             'marketName': market['id'],
         };
         let response = await this.v2GetMarketGetTicks (this.extend (request, params));
-        return this.parseOHLCVs (response['result'], market, timeframe, since, limit);
+        if ('result' in response) {
+            if (response['result'])
+                return this.parseOHLCVs (response['result'], market, timeframe, since, limit);
+        }
+        throw new ExchangeError (this.id + ' returned an empty or unrecognized response: ' + this.json (response));
     }
 
     async fetchOpenOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
@@ -370,7 +420,7 @@ module.exports = class bittrex extends Exchange {
             request['market'] = market['id'];
         }
         let response = await this.marketGetOpenorders (this.extend (request, params));
-        let orders = this.parseOrders (response['result'], market);
+        let orders = this.parseOrders (response['result'], market, since, limit);
         return this.filterOrdersBySymbol (orders, symbol);
     }
 
@@ -488,7 +538,7 @@ module.exports = class bittrex extends Exchange {
         await this.loadMarkets ();
         let response = undefined;
         try {
-            response = await this.accountGetOrder ({ 'uuid': id });
+            response = await this.accountGetOrder (this.extend ({ 'uuid': id }, params));
         } catch (e) {
             if (this.last_json_response) {
                 let message = this.safeString (this.last_json_response, 'message');
@@ -509,7 +559,7 @@ module.exports = class bittrex extends Exchange {
             request['market'] = market['id'];
         }
         let response = await this.accountGetOrderhistory (this.extend (request, params));
-        let orders = this.parseOrders (response['result'], market);
+        let orders = this.parseOrders (response['result'], market, since, limit);
         return this.filterOrdersBySymbol (orders, symbol);
     }
 
@@ -595,10 +645,19 @@ module.exports = class bittrex extends Exchange {
                 if ('success' in response) {
                     if (!response['success']) {
                         if ('message' in response) {
+                            if (response['message'] == 'INSUFFICIENT_FUNDS')
+                                throw new InsufficientFunds (this.id + ' ' + this.json (response));
                             if (response['message'] == 'MIN_TRADE_REQUIREMENT_NOT_MET')
                                 throw new InvalidOrder (this.id + ' ' + this.json (response));
-                            if (response['message'] == 'APIKEY_INVALID')
-                                throw new AuthenticationError (this.id + ' ' + this.json (response));
+                            if (response['message'] == 'APIKEY_INVALID') {
+                                if (this.hasAlreadyAuthenticatedSuccessfully) {
+                                    throw new DDoSProtection (this.id + ' ' + this.json (response));
+                                } else {
+                                    throw new AuthenticationError (this.id + ' ' + this.json (response));
+                                }
+                            }
+                            if (response['message'] == 'DUST_TRADE_DISALLOWED_MIN_VALUE_50K_SAT')
+                                throw new InvalidOrder (this.id + ' order cost should be over 50k satoshi ' + this.json (response));
                         }
                         throw new ExchangeError (this.id + ' ' + this.json (response));
                     }
@@ -610,14 +669,25 @@ module.exports = class bittrex extends Exchange {
     async request (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
         let response = await this.fetch2 (path, api, method, params, headers, body);
         if ('success' in response) {
-            if (response['success'])
+            if (response['success']) {
+                // a workaround for APIKEY_INVALID
+                if ((api == 'account') || (api == 'market'))
+                    this.hasAlreadyAuthenticatedSuccessfully = true;
                 return response;
+            }
         }
         if ('message' in response) {
             if (response['message'] == 'ADDRESS_GENERATING')
                 return response;
-            if (response['message'] == "INSUFFICIENT_FUNDS")
+            if (response['message'] == 'INSUFFICIENT_FUNDS')
                 throw new InsufficientFunds (this.id + ' ' + this.json (response));
+            if (response['message'] == 'APIKEY_INVALID') {
+                if (this.hasAlreadyAuthenticatedSuccessfully) {
+                    throw new DDoSProtection (this.id + ' ' + this.json (response));
+                } else {
+                    throw new AuthenticationError (this.id + ' ' + this.json (response));
+                }
+            }
         }
         throw new ExchangeError (this.id + ' ' + this.json (response));
     }

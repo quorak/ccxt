@@ -309,7 +309,7 @@ class gatecoin (Exchange):
         response = self.publicGetPublicTransactionsCurrencyPair(self.extend({
             'CurrencyPair': market['id'],
         }, params))
-        return self.parse_trades(response['transactions'], market)
+        return self.parse_trades(response['transactions'], market, since, limit)
 
     def parse_ohlcv(self, ohlcv, market=None, timeframe='1m', since=None, limit=None):
         return [
@@ -367,14 +367,15 @@ class gatecoin (Exchange):
         else:
             self.check_required_credentials()
             nonce = self.nonce()
+            nonceString = str(nonce)
             contentType = '' if (method == 'GET') else 'application/json'
-            auth = method + url + contentType + str(nonce)
+            auth = method + url + contentType + nonceString
             auth = auth.lower()
             signature = self.hmac(self.encode(auth), self.encode(self.secret), hashlib.sha256, 'base64')
             headers = {
                 'API_PUBLIC_KEY': self.apiKey,
-                'API_REQUEST_SIGNATURE': signature,
-                'API_REQUEST_DATE': nonce,
+                'API_REQUEST_SIGNATURE': self.decode(signature),
+                'API_REQUEST_DATE': nonceString,
             }
             if method != 'GET':
                 headers['Content-Type'] = contentType

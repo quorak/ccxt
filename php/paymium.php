@@ -2,8 +2,6 @@
 
 namespace ccxt;
 
-include_once ('base/Exchange.php');
-
 class paymium extends Exchange {
 
     public function describe () {
@@ -72,16 +70,16 @@ class paymium extends Exchange {
     public function fetch_balance ($params = array ()) {
         $balances = $this->privateGetUser ();
         $result = array ( 'info' => $balances );
-        $currencies = array_keys ($this->currencies);
+        $currencies = is_array ($this->currencies) ? array_keys ($this->currencies) : array ();
         for ($i = 0; $i < count ($currencies); $i++) {
             $currency = $currencies[$i];
             $lowercase = strtolower ($currency);
             $account = $this->account ();
             $balance = 'balance_' . $lowercase;
             $locked = 'locked_' . $lowercase;
-            if (array_key_exists ($balance, $balances))
+            if (is_array ($balances) && array_key_exists ($balance, $balances))
                 $account['free'] = $balances[$balance];
-            if (array_key_exists ($locked, $balances))
+            if (is_array ($balances) && array_key_exists ($locked, $balances))
                 $account['used'] = $balances[$locked];
             $account['total'] = $this->sum ($account['free'], $account['used']);
             $result[$currency] = $account;
@@ -110,17 +108,17 @@ class paymium extends Exchange {
             'symbol' => $symbol,
             'timestamp' => $timestamp,
             'datetime' => $this->iso8601 ($timestamp),
-            'high' => floatval ($ticker['high']),
-            'low' => floatval ($ticker['low']),
-            'bid' => floatval ($ticker['bid']),
-            'ask' => floatval ($ticker['ask']),
+            'high' => $this->safe_float($ticker, 'high'),
+            'low' => $this->safe_float($ticker, 'low'),
+            'bid' => $this->safe_float($ticker, 'bid'),
+            'ask' => $this->safe_float($ticker, 'ask'),
             'vwap' => $vwap,
-            'open' => floatval ($ticker['open']),
+            'open' => $this->safe_float($ticker, 'open'),
             'close' => null,
             'first' => null,
-            'last' => floatval ($ticker['price']),
+            'last' => $this->safe_float($ticker, 'price'),
             'change' => null,
-            'percentage' => floatval ($ticker['variation']),
+            'percentage' => $this->safe_float($ticker, 'variation'),
             'average' => null,
             'baseVolume' => $baseVolume,
             'quoteVolume' => $quoteVolume,
@@ -150,7 +148,7 @@ class paymium extends Exchange {
         $response = $this->publicGetDataIdTrades (array_merge (array (
             'id' => $market['id'],
         ), $params));
-        return $this->parse_trades($response, $market);
+        return $this->parse_trades($response, $market, $since, $limit);
     }
 
     public function create_order ($market, $type, $side, $amount, $price = null, $params = array ()) {
@@ -198,10 +196,8 @@ class paymium extends Exchange {
 
     public function request ($path, $api = 'public', $method = 'GET', $params = array (), $headers = null, $body = null) {
         $response = $this->fetch2 ($path, $api, $method, $params, $headers, $body);
-        if (array_key_exists ('errors', $response))
+        if (is_array ($response) && array_key_exists ('errors', $response))
             throw new ExchangeError ($this->id . ' ' . $this->json ($response));
         return $response;
     }
 }
-
-?>

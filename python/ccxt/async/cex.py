@@ -116,15 +116,17 @@ class cex (Exchange):
 
     async def fetch_balance(self, params={}):
         await self.load_markets()
-        balances = await self.privatePostBalance()
-        result = {'info': balances}
-        currencies = list(self.currencies.keys())
+        response = await self.privatePostBalance()
+        result = {'info': response}
+        ommited = ['username', 'timestamp']
+        balances = self.omit(response, ommited)
+        currencies = list(balances.keys())
         for i in range(0, len(currencies)):
             currency = currencies[i]
             if currency in balances:
                 account = {
-                    'free': float(balances[currency]['available']),
-                    'used': float(balances[currency]['orders']),
+                    'free': self.safe_float(balances[currency], 'available', 0.0),
+                    'used': self.safe_float(balances[currency], 'orders', 0.0),
                     'total': 0.0,
                 }
                 account['total'] = self.sum(account['free'], account['used'])
@@ -245,7 +247,7 @@ class cex (Exchange):
         response = await self.publicGetTradeHistoryPair(self.extend({
             'pair': market['id'],
         }, params))
-        return self.parse_trades(response, market)
+        return self.parse_trades(response, market, since, limit)
 
     async def create_order(self, symbol, type, side, amount, price=None, params={}):
         await self.load_markets()
@@ -273,12 +275,6 @@ class cex (Exchange):
         await self.load_markets()
         return await self.privatePostCancelOrder({'id': id})
 
-    async def fetch_order(self, id, symbol=None, params={}):
-        await self.load_markets()
-        return await self.privatePostGetOrder(self.extend({
-            'id': str(id),
-        }, params))
-
     def parse_order(self, order, market=None):
         timestamp = int(order['time'])
         symbol = None
@@ -287,7 +283,9 @@ class cex (Exchange):
             if symbol in self.markets:
                 market = self.market(symbol)
         status = order['status']
-        if status == 'cd':
+        if status == 'a':
+            status = 'open'  # the unified status
+        elif status == 'cd':
             status = 'canceled'
         elif status == 'c':
             status = 'canceled'
@@ -355,7 +353,14 @@ class cex (Exchange):
         orders = await getattr(self, method)(self.extend(request, params))
         for i in range(0, len(orders)):
             orders[i] = self.extend(orders[i], {'status': 'open'})
-        return self.parse_orders(orders, market)
+        return self.parse_orders(orders, market, since, limit)
+
+    async def fetch_order(self, id, symbol=None, params={}):
+        await self.load_markets()
+        response = await self.privatePostGetOrder(self.extend({
+            'id': str(id),
+        }, params))
+        return self.parse_order(response)
 
     def nonce(self):
         return self.milliseconds()

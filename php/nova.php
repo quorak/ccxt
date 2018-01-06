@@ -2,8 +2,6 @@
 
 namespace ccxt;
 
-include_once ('base/Exchange.php');
-
 class nova extends Exchange {
 
     public function describe () {
@@ -138,7 +136,7 @@ class nova extends Exchange {
         $response = $this->publicGetMarketOrderhistoryPair (array_merge (array (
             'pair' => $market['id'],
         ), $params));
-        return $this->parse_trades($response['items'], $market);
+        return $this->parse_trades($response['items'], $market, $since, $limit);
     }
 
     public function fetch_balance ($params = array ()) {
@@ -215,11 +213,9 @@ class nova extends Exchange {
 
     public function request ($path, $api = 'public', $method = 'GET', $params = array (), $headers = null, $body = null) {
         $response = $this->fetch2 ($path, $api, $method, $params, $headers, $body);
-        if (array_key_exists ('status', $response))
+        if (is_array ($response) && array_key_exists ('status', $response))
             if ($response['status'] != 'success')
                 throw new ExchangeError ($this->id . ' ' . $this->json ($response));
         return $response;
     }
 }
-
-?>

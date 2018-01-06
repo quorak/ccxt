@@ -2,6 +2,7 @@
 
 from ccxt.base.exchange import Exchange
 import hashlib
+import math
 from ccxt.base.errors import ExchangeError
 from ccxt.base.errors import InsufficientFunds
 from ccxt.base.errors import OrderNotFound
@@ -24,6 +25,7 @@ class poloniex (Exchange):
             'hasFetchOpenOrders': True,
             'hasFetchClosedOrders': True,
             'hasFetchTickers': True,
+            'hasFetchCurrencies': True,
             'hasWithdraw': True,
             'hasFetchOHLCV': True,
             # new metainfo interface
@@ -35,6 +37,7 @@ class poloniex (Exchange):
                 'fetchOpenOrders': True,
                 'fetchClosedOrders': 'emulated',
                 'fetchTickers': True,
+                'fetchCurrencies': True,
                 'withdraw': True,
             },
             'timeframes': {
@@ -140,6 +143,7 @@ class poloniex (Exchange):
         else:
             key = 'base'
         return {
+            'type': takerOrMaker,
             'currency': market[key],
             'rate': rate,
             'cost': float(self.fee_to_precision(symbol, cost)),
@@ -148,11 +152,15 @@ class poloniex (Exchange):
     def common_currency_code(self, currency):
         if currency == 'BTM':
             return 'Bitmark'
+        if currency == 'STR':
+            return 'XLM'
         return currency
 
     def currency_id(self, currency):
         if currency == 'Bitmark':
             return 'BTM'
+        if currency == 'XLM':
+            return 'STR'
         return currency
 
     def parse_ohlcv(self, ohlcv, market=None, timeframe='5m', since=None, limit=None):
@@ -236,6 +244,7 @@ class poloniex (Exchange):
         self.load_markets()
         orderbook = self.publicGetReturnOrderBook(self.extend({
             'currencyPair': self.market_id(symbol),
+            # 'depth': 100,
         }, params))
         return self.parse_order_book(orderbook)
 
@@ -278,6 +287,52 @@ class poloniex (Exchange):
             result[symbol] = self.parse_ticker(ticker, market)
         return result
 
+    def fetch_currencies(self, params={}):
+        currencies = self.publicGetReturnCurrencies(params)
+        ids = list(currencies.keys())
+        result = {}
+        for i in range(0, len(ids)):
+            id = ids[i]
+            currency = currencies[id]
+            # todo: will need to rethink the fees
+            # to add support for multiple withdrawal/deposit methods and
+            # differentiated fees for each particular method
+            precision = 8  # default precision, todo: fix "magic constants"
+            code = self.common_currency_code(id)
+            active = (currency['delisted'] == 0)
+            status = 'disabled' if (currency['disabled']) else 'ok'
+            if status != 'ok':
+                active = False
+            result[code] = {
+                'id': id,
+                'code': code,
+                'info': currency,
+                'name': currency['name'],
+                'active': active,
+                'status': status,
+                'fee': currency['txFee'],  # todo: redesign
+                'precision': precision,
+                'limits': {
+                    'amount': {
+                        'min': math.pow(10, -precision),
+                        'max': math.pow(10, precision),
+                    },
+                    'price': {
+                        'min': math.pow(10, -precision),
+                        'max': math.pow(10, precision),
+                    },
+                    'cost': {
+                        'min': None,
+                        'max': None,
+                    },
+                    'withdraw': {
+                        'min': currency['txFee'],
+                        'max': math.pow(10, precision),
+                    },
+                },
+            }
+        return result
+
     def fetch_ticker(self, symbol, params={}):
         self.load_markets()
         market = self.market(symbol)
@@ -288,20 +343,38 @@ class poloniex (Exchange):
     def parse_trade(self, trade, market=None):
         timestamp = self.parse8601(trade['date'])
         symbol = None
+        base = None
+        quote = None
         if (not market) and('currencyPair' in list(trade.keys())):
-            market = self.markets_by_id[trade['currencyPair']]['symbol']
+            currencyPair = trade['currencyPair']
+            if currencyPair in self.markets_by_id:
+                market = self.markets_by_id[currencyPair]
+            else:
+                parts = currencyPair.split('_')
+                quote = parts[0]
+                base = parts[1]
+                symbol = base + '/' + quote
         if market:
             symbol = market['symbol']
+            base = market['base']
+            quote = market['quote']
         side = trade['type']
         fee = None
         cost = self.safe_float(trade, 'total')
+        amount = float(trade['amount'])
         if 'fee' in trade:
-            currency = market['quote'] if (side == 'buy') else market['base']
             rate = float(trade['fee'])
             feeCost = None
-            if cost is not None:
-                feeCost = cost * rate
+            currency = None
+            if side == 'buy':
+                currency = base
+                feeCost = amount * rate
+            else:
+                currency = quote
+                if cost is not None:
+                    feeCost = cost * rate
             fee = {
+                'type': None,
                 'rate': rate,
                 'cost': feeCost,
                 'currency': currency,
@@ -316,7 +389,7 @@ class poloniex (Exchange):
             'type': 'limit',
             'side': side,
             'price': float(trade['rate']),
-            'amount': float(trade['amount']),
+            'amount': amount,
             'cost': cost,
             'fee': fee,
         }
@@ -331,7 +404,7 @@ class poloniex (Exchange):
             request['start'] = int(since / 1000)
             request['end'] = self.seconds()  # last 50000 trades by default
         trades = self.publicGetReturnTradeHistory(self.extend(request, params))
-        return self.parse_trades(trades, market)
+        return self.parse_trades(trades, market, since, limit)
 
     def fetch_my_trades(self, symbol=None, since=None, limit=None, params={}):
         self.load_markets()
@@ -355,12 +428,13 @@ class poloniex (Exchange):
                 ids = list(response.keys())
                 for i in range(0, len(ids)):
                     id = ids[i]
-                    market = self.markets_by_id[id]
-                    symbol = market['symbol']
+                    market = None
+                    if id in self.markets_by_id:
+                        market = self.markets_by_id[id]
                     trades = self.parse_trades(response[id], market)
                     for j in range(0, len(trades)):
                         result.append(trades[j])
-        return result
+        return self.filter_by_since_limit(result, since, limit)
 
     def parse_order(self, order, market=None):
         timestamp = self.safe_integer(order, 'timestamp')
@@ -450,10 +524,13 @@ class poloniex (Exchange):
                     result.append(order)
             else:
                 result.append(order)
-        return result
+        return self.filter_by_since_limit(result, since, limit)
 
     def fetch_order(self, id, symbol=None, params={}):
-        orders = self.fetch_orders(symbol, params)
+        since = self.safe_value(params, 'since')
+        limit = self.safe_value(params, 'limit')
+        request = self.omit(params, ['since', 'limit'])
+        orders = self.fetch_orders(symbol, since, limit, request)
         for i in range(0, len(orders)):
             if orders[i]['id'] == id:
                 return orders[i]
@@ -467,11 +544,11 @@ class poloniex (Exchange):
         return result
 
     def fetch_open_orders(self, symbol=None, since=None, limit=None, params={}):
-        orders = self.fetch_orders(symbol, params)
+        orders = self.fetch_orders(symbol, since, limit, params)
         return self.filter_orders_by_status(orders, 'open')
 
     def fetch_closed_orders(self, symbol=None, since=None, limit=None, params={}):
-        orders = self.fetch_orders(symbol, params)
+        orders = self.fetch_orders(symbol, since, limit, params)
         return self.filter_orders_by_status(orders, 'closed')
 
     def create_order(self, symbol, type, side, amount, price=None, params={}):
@@ -512,11 +589,15 @@ class poloniex (Exchange):
         response = self.privatePostMoveOrder(self.extend(request, params))
         result = None
         if id in self.orders:
-            self.orders[id] = self.extend(self.orders[id], {
+            self.orders[id]['status'] = 'canceled'
+            newid = response['orderNumber']
+            self.orders[newid] = self.extend(self.orders[id], {
+                'id': newid,
                 'price': price,
                 'amount': amount,
+                'status': 'open',
             })
-            result = self.extend(self.orders[id], {'info': response})
+            result = self.extend(self.orders[newid], {'info': response})
         else:
             result = {
                 'info': response,

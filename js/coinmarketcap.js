@@ -24,6 +24,10 @@ module.exports = class coinmarketcap extends Exchange {
             'hasFetchOrderBook': false,
             'hasFetchTrades': false,
             'hasFetchTickers': true,
+            'hasFetchCurrencies': true,
+            'has': {
+                'fetchCurrencies': true,
+            },
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/28244244-9be6312a-69ed-11e7-99c1-7c1797275265.jpg',
                 'api': 'https://api.coinmarketcap.com',
@@ -68,7 +72,9 @@ module.exports = class coinmarketcap extends Exchange {
     }
 
     async fetchMarkets () {
-        let markets = await this.publicGetTicker ();
+        let markets = await this.publicGetTicker ({
+            'limit': 0,
+        });
         let result = [];
         for (let p = 0; p < markets.length; p++) {
             let market = markets[p];
@@ -108,21 +114,22 @@ module.exports = class coinmarketcap extends Exchange {
             if (ticker['last_updated'])
                 timestamp = parseInt (ticker['last_updated']) * 1000;
         let change = undefined;
-        let changeKey = 'percent_change_24h';
-        if (changeKey in ticker)
-            change = parseFloat (ticker[changeKey]);
+        if ('percent_change_24h' in ticker)
+            if (ticker['percent_change_24h'])
+                change = this.safeFloat (ticker, 'percent_change_24h');
         let last = undefined;
         let symbol = undefined;
         let volume = undefined;
         if (market) {
-            let price = 'price_' + market['quoteId'];
-            if (price in ticker)
-                if (ticker[price])
-                    last = parseFloat (ticker[price]);
+            let priceKey = 'price_' + market['quoteId'];
+            if (priceKey in ticker)
+                if (ticker[priceKey])
+                    last = this.safeFloat (ticker, priceKey);
             symbol = market['symbol'];
             let volumeKey = '24h_volume_' + market['quoteId'];
             if (volumeKey in ticker)
-                volume = parseFloat (ticker[volumeKey]);
+                if (ticker[volumeKey])
+                    volume = this.safeFloat (ticker, volumeKey);
         }
         return {
             'symbol': symbol,
@@ -179,6 +186,51 @@ module.exports = class coinmarketcap extends Exchange {
         let response = await this.publicGetTickerId (request);
         let ticker = response[0];
         return this.parseTicker (ticker, market);
+    }
+
+    async fetchCurrencies (params = {}) {
+        let currencies = await this.publicGetTicker (this.extend ({
+            'limit': 0
+        }, params));
+        let result = {};
+        for (let i = 0; i < currencies.length; i++) {
+            let currency = currencies[i];
+            let id = currency['symbol'];
+            // todo: will need to rethink the fees
+            // to add support for multiple withdrawal/deposit methods and
+            // differentiated fees for each particular method
+            let precision = 8; // default precision, todo: fix "magic constants"
+            let code = this.commonCurrencyCode (id);
+            result[code] = {
+                'id': id,
+                'code': code,
+                'info': currency,
+                'name': currency['name'],
+                'active': true,
+                'status': 'ok',
+                'fee': undefined, // todo: redesign
+                'precision': precision,
+                'limits': {
+                    'amount': {
+                        'min': Math.pow (10, -precision),
+                        'max': Math.pow (10, precision),
+                    },
+                    'price': {
+                        'min': Math.pow (10, -precision),
+                        'max': Math.pow (10, precision),
+                    },
+                    'cost': {
+                        'min': undefined,
+                        'max': undefined,
+                    },
+                    'withdraw': {
+                        'min': undefined,
+                        'max': undefined,
+                    },
+                },
+            };
+        }
+        return result;
     }
 
     sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {

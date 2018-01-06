@@ -2,8 +2,6 @@
 
 namespace ccxt;
 
-include_once ('base/Exchange.php');
-
 class coinmarketcap extends Exchange {
 
     public function describe () {
@@ -21,6 +19,10 @@ class coinmarketcap extends Exchange {
             'hasFetchOrderBook' => false,
             'hasFetchTrades' => false,
             'hasFetchTickers' => true,
+            'hasFetchCurrencies' => true,
+            'has' => array (
+                'fetchCurrencies' => true,
+            ),
             'urls' => array (
                 'logo' => 'https://user-images.githubusercontent.com/1294454/28244244-9be6312a-69ed-11e7-99c1-7c1797275265.jpg',
                 'api' => 'https://api.coinmarketcap.com',
@@ -65,7 +67,9 @@ class coinmarketcap extends Exchange {
     }
 
     public function fetch_markets () {
-        $markets = $this->publicGetTicker ();
+        $markets = $this->publicGetTicker (array (
+            'limit' => 0,
+        ));
         $result = array ();
         for ($p = 0; $p < count ($markets); $p++) {
             $market = $markets[$p];
@@ -101,25 +105,26 @@ class coinmarketcap extends Exchange {
 
     public function parse_ticker ($ticker, $market = null) {
         $timestamp = $this->milliseconds ();
-        if (array_key_exists ('last_updated', $ticker))
+        if (is_array ($ticker) && array_key_exists ('last_updated', $ticker))
             if ($ticker['last_updated'])
                 $timestamp = intval ($ticker['last_updated']) * 1000;
         $change = null;
-        $changeKey = 'percent_change_24h';
-        if (array_key_exists ($changeKey, $ticker))
-            $change = floatval ($ticker[$changeKey]);
+        if (is_array ($ticker) && array_key_exists ('percent_change_24h', $ticker))
+            if ($ticker['percent_change_24h'])
+                $change = $this->safe_float($ticker, 'percent_change_24h');
         $last = null;
         $symbol = null;
         $volume = null;
         if ($market) {
-            $price = 'price_' . $market['quoteId'];
-            if (array_key_exists ($price, $ticker))
-                if ($ticker[$price])
-                    $last = floatval ($ticker[$price]);
+            $priceKey = 'price_' . $market['quoteId'];
+            if (is_array ($ticker) && array_key_exists ($priceKey, $ticker))
+                if ($ticker[$priceKey])
+                    $last = $this->safe_float($ticker, $priceKey);
             $symbol = $market['symbol'];
             $volumeKey = '24h_volume_' . $market['quoteId'];
-            if (array_key_exists ($volumeKey, $ticker))
-                $volume = floatval ($ticker[$volumeKey]);
+            if (is_array ($ticker) && array_key_exists ($volumeKey, $ticker))
+                if ($ticker[$volumeKey])
+                    $volume = $this->safe_float($ticker, $volumeKey);
         }
         return array (
             'symbol' => $symbol,
@@ -157,7 +162,7 @@ class coinmarketcap extends Exchange {
             $id = $ticker['id'] . '/' . $currency;
             $symbol = $id;
             $market = null;
-            if (array_key_exists ($id, $this->markets_by_id)) {
+            if (is_array ($this->markets_by_id) && array_key_exists ($id, $this->markets_by_id)) {
                 $market = $this->markets_by_id[$id];
                 $symbol = $market['symbol'];
             }
@@ -178,6 +183,51 @@ class coinmarketcap extends Exchange {
         return $this->parse_ticker($ticker, $market);
     }
 
+    public function fetch_currencies ($params = array ()) {
+        $currencies = $this->publicGetTicker (array_merge (array (
+            'limit' => 0
+        ), $params));
+        $result = array ();
+        for ($i = 0; $i < count ($currencies); $i++) {
+            $currency = $currencies[$i];
+            $id = $currency['symbol'];
+            // todo => will need to rethink the fees
+            // to add support for multiple withdrawal/deposit methods and
+            // differentiated fees for each particular method
+            $precision = 8; // default $precision, todo => fix "magic constants"
+            $code = $this->common_currency_code($id);
+            $result[$code] = array (
+                'id' => $id,
+                'code' => $code,
+                'info' => $currency,
+                'name' => $currency['name'],
+                'active' => true,
+                'status' => 'ok',
+                'fee' => null, // todo => redesign
+                'precision' => $precision,
+                'limits' => array (
+                    'amount' => array (
+                        'min' => pow (10, -$precision),
+                        'max' => pow (10, $precision),
+                    ),
+                    'price' => array (
+                        'min' => pow (10, -$precision),
+                        'max' => pow (10, $precision),
+                    ),
+                    'cost' => array (
+                        'min' => null,
+                        'max' => null,
+                    ),
+                    'withdraw' => array (
+                        'min' => null,
+                        'max' => null,
+                    ),
+                ),
+            );
+        }
+        return $result;
+    }
+
     public function sign ($path, $api = 'public', $method = 'GET', $params = array (), $headers = null, $body = null) {
         $url = $this->urls['api'] . '/' . $this->version . '/' . $this->implode_params($path, $params);
         $query = $this->omit ($params, $this->extract_params($path));
@@ -188,7 +238,7 @@ class coinmarketcap extends Exchange {
 
     public function request ($path, $api = 'public', $method = 'GET', $params = array (), $headers = null, $body = null) {
         $response = $this->fetch2 ($path, $api, $method, $params, $headers, $body);
-        if (array_key_exists ('error', $response)) {
+        if (is_array ($response) && array_key_exists ('error', $response)) {
             if ($response['error']) {
                 throw new ExchangeError ($this->id . ' ' . $this->json ($response));
             }
@@ -196,5 +246,3 @@ class coinmarketcap extends Exchange {
         return $response;
     }
 }
-
-?>

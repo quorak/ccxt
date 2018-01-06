@@ -19,6 +19,7 @@ class gdax (Exchange):
             'name': 'GDAX',
             'countries': 'US',
             'rateLimit': 1000,
+            'userAgent': self.userAgents['chrome'],
             'hasCORS': True,
             'hasFetchOHLCV': True,
             'hasDeposit': True,
@@ -102,8 +103,30 @@ class gdax (Exchange):
             },
             'fees': {
                 'trading': {
+                    'tierBased': True,  # complicated tier system per coin
+                    'percentage': True,
                     'maker': 0.0,
-                    'taker': 0.25 / 100,
+                    'taker': 0.30 / 100,  # worst-case scenario: https://www.gdax.com/fees/BTC-USD
+                },
+                'funding': {
+                    'tierBased': False,
+                    'percentage': False,
+                    'withdraw': {
+                        'BCH': 0,
+                        'BTC': 0,
+                        'LTC': 0,
+                        'ETH': 0,
+                        'EUR': 0.15,
+                        'USD': 25,
+                    },
+                    'deposit': {
+                        'BCH': 0,
+                        'BTC': 0,
+                        'LTC': 0,
+                        'ETH': 0,
+                        'EUR': 0.15,
+                        'USD': 10,
+                    },
                 },
             },
         })
@@ -183,7 +206,6 @@ class gdax (Exchange):
             'id': market['id'],
         }, params)
         ticker = self.publicGetProductsIdTicker(request)
-        quote = self.publicGetProductsIdStats(request)
         timestamp = self.parse8601(ticker['time'])
         bid = None
         ask = None
@@ -195,15 +217,15 @@ class gdax (Exchange):
             'symbol': symbol,
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
-            'high': float(quote['high']),
-            'low': float(quote['low']),
+            'high': None,
+            'low': None,
             'bid': bid,
             'ask': ask,
             'vwap': None,
-            'open': float(quote['open']),
+            'open': None,
             'close': None,
             'first': None,
-            'last': float(quote['last']),
+            'last': self.safe_float(ticker, 'price'),
             'change': None,
             'percentage': None,
             'average': None,
@@ -243,7 +265,7 @@ class gdax (Exchange):
         response = self.publicGetProductsIdTrades(self.extend({
             'id': market['id'],  # fixes issue  #2
         }, params))
-        return self.parse_trades(response, market)
+        return self.parse_trades(response, market, since, limit)
 
     def parse_ohlcv(self, ohlcv, market=None, timeframe='1m', since=None, limit=None):
         return [
@@ -275,7 +297,7 @@ class gdax (Exchange):
         response = self.publicGetTime()
         return self.parse8601(response['iso'])
 
-    def get_order_status(self, status):
+    def parse_order_status(self, status):
         statuses = {
             'pending': 'open',
             'active': 'open',
@@ -291,7 +313,7 @@ class gdax (Exchange):
         if not market:
             if order['product_id'] in self.markets_by_id:
                 market = self.markets_by_id[order['product_id']]
-        status = self.get_order_status(order['status'])
+        status = self.parse_order_status(order['status'])
         price = self.safe_float(order, 'price')
         amount = self.safe_float(order, 'size')
         filled = self.safe_float(order, 'filled_size')
@@ -333,7 +355,7 @@ class gdax (Exchange):
             market = self.market(symbol)
             request['product_id'] = market['id']
         response = self.privateGetOrders(self.extend(request, params))
-        return self.parse_orders(response, market)
+        return self.parse_orders(response, market, since, limit)
 
     def fetch_open_orders(self, symbol=None, since=None, limit=None, params={}):
         self.load_markets()
@@ -343,7 +365,7 @@ class gdax (Exchange):
             market = self.market(symbol)
             request['product_id'] = market['id']
         response = self.privateGetOrders(self.extend(request, params))
-        return self.parse_orders(response, market)
+        return self.parse_orders(response, market, since, limit)
 
     def fetch_closed_orders(self, symbol=None, since=None, limit=None, params={}):
         self.load_markets()
@@ -355,7 +377,7 @@ class gdax (Exchange):
             market = self.market(symbol)
             request['product_id'] = market['id']
         response = self.privateGetOrders(self.extend(request, params))
-        return self.parse_orders(response, market)
+        return self.parse_orders(response, market, since, limit)
 
     def create_order(self, market, type, side, amount, price=None, params={}):
         self.load_markets()

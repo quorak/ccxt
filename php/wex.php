@@ -2,8 +2,6 @@
 
 namespace ccxt;
 
-include_once ('liqui.php');
-
 class wex extends liqui {
 
     public function describe () {
@@ -94,24 +92,25 @@ class wex extends liqui {
                 throw new ExchangeError ($this->id . ' returned a non-JSON reply => ' . $body);
             }
             $response = json_decode ($body, $as_associative_array = true);
-            $success = $this->safe_value($response, 'success');
-            if (!$success) {
-                $error = $this->safe_value($response, 'error');
-                if (!$error) {
-                    throw new ExchangeError ($this->id . ' returned a malformed $error => ' . $body);
-                } else if ($error == 'bad status') {
-                    throw new OrderNotFound ($this->id . ' ' . $error);
-                } else if (mb_strpos ($error, 'It is not enough') !== false) {
-                    throw new InsufficientFunds ($this->id . ' ' . $error);
-                } else if ($error == 'Requests too often') {
-                    throw new DDoSProtection ($this->id . ' ' . $error);
-                } else if ($error == 'not available') {
-                    throw new DDoSProtection ($this->id . ' ' . $error);
-                } else if ($error == 'external service unavailable') {
-                    throw new DDoSProtection ($this->id . ' ' . $error);
-                // that's what fetchOpenOrders return if no open orders (fix for #489)
-                } else if ($error != 'no orders') {
-                    throw new ExchangeError ($this->id . ' ' . $error);
+            if (is_array ($response) && array_key_exists ('success', $response)) {
+                if (!$response['success']) {
+                    $error = $this->safe_value($response, 'error');
+                    if (!$error) {
+                        throw new ExchangeError ($this->id . ' returned a malformed $error => ' . $body);
+                    } else if ($error == 'bad status') {
+                        throw new OrderNotFound ($this->id . ' ' . $error);
+                    } else if (mb_strpos ($error, 'It is not enough') !== false) {
+                        throw new InsufficientFunds ($this->id . ' ' . $error);
+                    } else if ($error == 'Requests too often') {
+                        throw new DDoSProtection ($this->id . ' ' . $error);
+                    } else if ($error == 'not available') {
+                        throw new DDoSProtection ($this->id . ' ' . $error);
+                    } else if ($error == 'external service unavailable') {
+                        throw new DDoSProtection ($this->id . ' ' . $error);
+                    // that's what fetchOpenOrders return if no open orders (fix for #489)
+                    } else if ($error != 'no orders') {
+                        throw new ExchangeError ($this->id . ' ' . $error);
+                    }
                 }
             }
         }
@@ -121,5 +120,3 @@ class wex extends liqui {
         return $this->fetch2 ($path, $api, $method, $params, $headers, $body);
     }
 }
-
-?>

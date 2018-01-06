@@ -17,6 +17,12 @@ module.exports = class quadrigacx extends Exchange {
             'rateLimit': 1000,
             'version': 'v2',
             'hasCORS': true,
+            // obsolete metainfo interface
+            'hasWithdraw': true,
+            // new metainfo interface
+            'has': {
+                'withdraw': true,
+            },
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766825-98a6d0de-5ee7-11e7-9fa4-38e11a2c6f52.jpg',
                 'api': 'https://api.quadrigacx.com',
@@ -59,6 +65,7 @@ module.exports = class quadrigacx extends Exchange {
                 'ETH/CAD': { 'id': 'eth_cad', 'symbol': 'ETH/CAD', 'base': 'ETH', 'quote': 'CAD', 'maker': 0.005, 'taker': 0.005 },
                 'LTC/CAD': { 'id': 'ltc_cad', 'symbol': 'LTC/CAD', 'base': 'LTC', 'quote': 'CAD', 'maker': 0.005, 'taker': 0.005 },
                 'BCH/CAD': { 'id': 'btc_cad', 'symbol': 'BCH/CAD', 'base': 'BCH', 'quote': 'CAD', 'maker': 0.005, 'taker': 0.005 },
+                'BTG/CAD': { 'id': 'btg_cad', 'symbol': 'BTG/CAD', 'base': 'BTG', 'quote': 'CAD', 'maker': 0.005, 'taker': 0.005 },
             },
         });
     }
@@ -139,7 +146,7 @@ module.exports = class quadrigacx extends Exchange {
         let response = await this.publicGetTransactions (this.extend ({
             'book': market['id'],
         }, params));
-        return this.parseTrades (response, market);
+        return this.parseTrades (response, market, since, limit);
     }
 
     async createOrder (symbol, type, side, amount, price = undefined, params = {}) {
@@ -161,6 +168,47 @@ module.exports = class quadrigacx extends Exchange {
         return await this.privatePostCancelOrder (this.extend ({
             'id': id,
         }, params));
+    }
+
+    async fetchDepositAddress (currency, params = {}) {
+        let method = 'privatePost' + this.getCurrencyName (currency) + 'DepositAddress';
+        let response = await this[method] (params);
+        let address = undefined;
+        let status = undefined;
+        // [E|e]rror
+        if (response.indexOf ('rror') >= 0) {
+            status = 'error';
+        } else {
+            address = response;
+            status = 'ok';
+        }
+        return {
+            'currency': currency,
+            'address': address,
+            'status': status,
+            'info': this.last_http_response,
+        };
+    }
+
+    getCurrencyName (currency) {
+        if (currency == 'ETH')
+            return 'Ether';
+        if (currency == 'BTC')
+            return 'Bitcoin';
+    }
+
+    async withdraw (currency, amount, address, params = {}) {
+        await this.loadMarkets ();
+        let request = {
+            'amount': amount,
+            'address': address
+        };
+        let method = 'privatePost' + this.getCurrencyName (currency) + 'Withdrawal';
+        let response = await this[method] (this.extend (request, params));
+        return {
+            'info': response,
+            'id': undefined,
+        };
     }
 
     sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
@@ -187,6 +235,8 @@ module.exports = class quadrigacx extends Exchange {
 
     async request (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
         let response = await this.fetch2 (path, api, method, params, headers, body);
+        if (typeof response == 'string')
+            return response;
         if ('error' in response)
             throw new ExchangeError (this.id + ' ' + this.json (response));
         return response;

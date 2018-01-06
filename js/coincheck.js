@@ -167,7 +167,7 @@ module.exports = class coincheck extends Exchange {
             throw new NotSupported (this.id + ' fetchTrades () supports BTC/JPY only');
         let market = this.market (symbol);
         let response = await this.publicGetTrades (params);
-        return this.parseTrades (response, market);
+        return this.parseTrades (response, market, since, limit);
     }
 
     async createOrder (symbol, type, side, amount, price = undefined, params = {}) {
@@ -205,9 +205,17 @@ module.exports = class coincheck extends Exchange {
         } else {
             this.checkRequiredCredentials ();
             let nonce = this.nonce ().toString ();
-            if (Object.keys (query).length)
-                body = this.urlencode (this.keysort (query));
-            let auth = nonce + url + (body || '');
+            let queryString = '';
+            if (method == 'GET') {
+                if (Object.keys (query).length)
+                    url += '?' + this.urlencode (this.keysort (query));
+            } else {
+                if (Object.keys (query).length) {
+                    body = this.urlencode (this.keysort (query));
+                    queryString = body;
+                }
+            }
+            let auth = nonce + url + queryString;
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'ACCESS-KEY': this.apiKey,

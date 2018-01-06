@@ -2,8 +2,6 @@
 
 namespace ccxt;
 
-include_once ('base/Exchange.php');
-
 class zaif extends Exchange {
 
     public function describe () {
@@ -112,7 +110,7 @@ class zaif extends Exchange {
         $response = $this->privatePostGetInfo ();
         $balances = $response['return'];
         $result = array ( 'info' => $balances );
-        $currencies = array_keys ($balances['funds']);
+        $currencies = is_array ($balances['funds']) ? array_keys ($balances['funds']) : array ();
         for ($c = 0; $c < count ($currencies); $c++) {
             $currency = $currencies[$c];
             $balance = $balances['funds'][$currency];
@@ -122,8 +120,8 @@ class zaif extends Exchange {
                 'used' => 0.0,
                 'total' => $balance,
             );
-            if (array_key_exists ('deposit', $balances)) {
-                if (array_key_exists ($currency, $balances['deposit'])) {
+            if (is_array ($balances) && array_key_exists ('deposit', $balances)) {
+                if (is_array ($balances['deposit']) && array_key_exists ($currency, $balances['deposit'])) {
                     $account['total'] = $balances['deposit'][$currency];
                     $account['used'] = $account['total'] - $account['free'];
                 }
@@ -198,7 +196,7 @@ class zaif extends Exchange {
         $response = $this->publicGetTradesPair (array_merge (array (
             'pair' => $market['id'],
         ), $params));
-        return $this->parse_trades($response, $market);
+        return $this->parse_trades($response, $market, $since, $limit);
     }
 
     public function create_order ($symbol, $type, $side, $amount, $price = null, $params = array ()) {
@@ -248,8 +246,8 @@ class zaif extends Exchange {
         );
     }
 
-    public function parse_orders ($orders, $market = null) {
-        $ids = array_keys ($orders);
+    public function parse_orders ($orders, $market = null, $since = null, $limit = null) {
+        $ids = is_array ($orders) ? array_keys ($orders) : array ();
         $result = array ();
         for ($i = 0; $i < count ($ids); $i++) {
             $id = $ids[$i];
@@ -257,7 +255,7 @@ class zaif extends Exchange {
             $extended = array_merge ($order, array ( 'id' => $id ));
             $result[] = $this->parse_order($extended, $market);
         }
-        return $result;
+        return $this->filter_by_since_limit($result, $since, $limit);
     }
 
     public function fetch_open_orders ($symbol = null, $since = null, $limit = null, $params = array ()) {
@@ -272,7 +270,7 @@ class zaif extends Exchange {
             $request['currency_pair'] = $market['id'];
         }
         $response = $this->privatePostActiveOrders (array_merge ($request, $params));
-        return $this->parse_orders($response['return'], $market);
+        return $this->parse_orders($response['return'], $market, $since, $limit);
     }
 
     public function fetch_closed_orders ($symbol = null, $since = null, $limit = null, $params = array ()) {
@@ -293,7 +291,7 @@ class zaif extends Exchange {
             $request['currency_pair'] = $market['id'];
         }
         $response = $this->privatePostTradeHistory (array_merge ($request, $params));
-        return $this->parse_orders($response['return'], $market);
+        return $this->parse_orders($response['return'], $market, $since, $limit);
     }
 
     public function withdraw ($currency, $amount, $address, $params = array ()) {
@@ -345,13 +343,11 @@ class zaif extends Exchange {
 
     public function request ($path, $api = 'api', $method = 'GET', $params = array (), $headers = null, $body = null) {
         $response = $this->fetch2 ($path, $api, $method, $params, $headers, $body);
-        if (array_key_exists ('error', $response))
+        if (is_array ($response) && array_key_exists ('error', $response))
             throw new ExchangeError ($this->id . ' ' . $response['error']);
-        if (array_key_exists ('success', $response))
+        if (is_array ($response) && array_key_exists ('success', $response))
             if (!$response['success'])
                 throw new ExchangeError ($this->id . ' ' . $this->json ($response));
         return $response;
     }
 }
-
-?>

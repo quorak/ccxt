@@ -159,7 +159,7 @@ class coincheck (Exchange):
             raise NotSupported(self.id + ' fetchTrades() supports BTC/JPY only')
         market = self.market(symbol)
         response = self.publicGetTrades(params)
-        return self.parse_trades(response, market)
+        return self.parse_trades(response, market, since, limit)
 
     def create_order(self, symbol, type, side, amount, price=None, params={}):
         prefix = ''
@@ -193,9 +193,15 @@ class coincheck (Exchange):
         else:
             self.check_required_credentials()
             nonce = str(self.nonce())
-            if query:
-                body = self.urlencode(self.keysort(query))
-            auth = nonce + url + (body or '')
+            queryString = ''
+            if method == 'GET':
+                if query:
+                    url += '?' + self.urlencode(self.keysort(query))
+            else:
+                if query:
+                    body = self.urlencode(self.keysort(query))
+                    queryString = body
+            auth = nonce + url + queryString
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'ACCESS-KEY': self.apiKey,

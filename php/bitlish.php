@@ -2,14 +2,12 @@
 
 namespace ccxt;
 
-include_once ('base/Exchange.php');
-
 class bitlish extends Exchange {
 
     public function describe () {
         return array_replace_recursive (parent::describe (), array (
             'id' => 'bitlish',
-            'name' => 'bitlish',
+            'name' => 'Bitlish',
             'countries' => array ( 'GB', 'EU', 'RU' ),
             'rateLimit' => 1500,
             'version' => 'v1',
@@ -26,6 +24,38 @@ class bitlish extends Exchange {
             'requiredCredentials' => array (
                 'apiKey' => true,
                 'secret' => false,
+            ),
+            'fees' => array (
+                'trading' => array (
+                    'tierBased' => false,
+                    'percentage' => true,
+                    'taker' => 0.3 / 100, // anonymous 0.3%, verified 0.2%
+                    'maker' => 0,
+                ),
+                'funding' => array (
+                    'tierBased' => false,
+                    'percentage' => false,
+                    'withdraw' => array (
+                        'BTC' => 0.001,
+                        'LTC' => 0.001,
+                        'DOGE' => 0.001,
+                        'ETH' => 0.001,
+                        'XMR' => 0,
+                        'ZEC' => 0.001,
+                        'DASH' => 0.0001,
+                        'EUR' => 50,
+                    ),
+                    'deposit' => array (
+                        'BTC' => 0,
+                        'LTC' => 0,
+                        'DOGE' => 0,
+                        'ETH' => 0,
+                        'XMR' => 0,
+                        'ZEC' => 0,
+                        'DASH' => 0,
+                        'EUR' => 0,
+                    ),
+                ),
             ),
             'api' => array (
                 'public' => array (
@@ -90,13 +120,15 @@ class bitlish extends Exchange {
             return 'DASH';
         if ($currency == 'DSH')
             $currency = 'DASH';
+        if ($currency == 'XDG')
+            $currency = 'DOGE';
         return $currency;
     }
 
     public function fetch_markets () {
         $markets = $this->publicGetPairs ();
         $result = array ();
-        $keys = array_keys ($markets);
+        $keys = is_array ($markets) ? array_keys ($markets) : array ();
         for ($p = 0; $p < count ($keys); $p++) {
             $market = $markets[$keys[$p]];
             $id = $market['id'];
@@ -146,7 +178,7 @@ class bitlish extends Exchange {
     public function fetch_tickers ($symbols = null, $params = array ()) {
         $this->load_markets();
         $tickers = $this->publicGetTickers ($params);
-        $ids = array_keys ($tickers);
+        $ids = is_array ($tickers) ? array_keys ($tickers) : array ();
         $result = array ();
         for ($i = 0; $i < count ($ids); $i++) {
             $id = $ids[$i];
@@ -182,7 +214,10 @@ class bitlish extends Exchange {
         $orderbook = $this->publicGetTradesDepth (array_merge (array (
             'pair_id' => $this->market_id($symbol),
         ), $params));
-        $timestamp = intval (intval ($orderbook['last']) / 1000);
+        $timestamp = null;
+        $last = $this->safe_integer($orderbook, 'last');
+        if ($last)
+            $timestamp = intval ($last / 1000);
         return $this->parse_order_book($orderbook, $timestamp, 'bid', 'ask', 'price', 'volume');
     }
 
@@ -212,14 +247,14 @@ class bitlish extends Exchange {
         $response = $this->publicGetTradesHistory (array_merge (array (
             'pair_id' => $market['id'],
         ), $params));
-        return $this->parse_trades($response['list'], $market);
+        return $this->parse_trades($response['list'], $market, $since, $limit);
     }
 
     public function fetch_balance ($params = array ()) {
         $this->load_markets();
         $response = $this->privatePostBalance ();
         $result = array ( 'info' => $response );
-        $currencies = array_keys ($response);
+        $currencies = is_array ($response) ? array_keys ($response) : array ();
         $balance = array ();
         for ($c = 0; $c < count ($currencies); $c++) {
             $currency = $currencies[$c];
@@ -228,13 +263,15 @@ class bitlish extends Exchange {
             // issue #4 bitlish names Dash as DSH, instead of DASH
             if ($currency == 'DSH')
                 $currency = 'DASH';
+            if ($currency == 'XDG')
+                $currency = 'DOGE';
             $balance[$currency] = $account;
         }
-        $currencies = array_keys ($this->currencies);
+        $currencies = is_array ($this->currencies) ? array_keys ($this->currencies) : array ();
         for ($i = 0; $i < count ($currencies); $i++) {
             $currency = $currencies[$i];
             $account = $this->account ();
-            if (array_key_exists ($currency, $balance)) {
+            if (is_array ($balance) && array_key_exists ($currency, $balance)) {
                 $account['free'] = floatval ($balance[$currency]['funds']);
                 $account['used'] = floatval ($balance[$currency]['holded']);
                 $account['total'] = $this->sum ($account['free'], $account['used']);
@@ -309,5 +346,3 @@ class bitlish extends Exchange {
         return array ( 'url' => $url, 'method' => $method, 'body' => $body, 'headers' => $headers );
     }
 }
-
-?>

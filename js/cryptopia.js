@@ -23,6 +23,7 @@ module.exports = class cryptopia extends Exchange {
             'hasFetchOpenOrders': true,
             'hasFetchClosedOrders': true,
             'hasFetchMyTrades': true,
+            'hasFetchCurrencies': true,
             'hasDeposit': true,
             'hasWithdraw': true,
             // new metainfo interface
@@ -33,6 +34,7 @@ module.exports = class cryptopia extends Exchange {
                 'fetchOpenOrders': true,
                 'fetchClosedOrders': 'emulated',
                 'fetchMyTrades': true,
+                'fetchCurrencies': true,
                 'deposit': true,
                 'withdraw': true,
             },
@@ -91,6 +93,10 @@ module.exports = class cryptopia extends Exchange {
             return 'NetCoin';
         if (currency == 'BTG')
             return 'Bitgem';
+        if (currency == 'FUEL')
+            return 'FC2'; // FuelCoin != FUEL
+        if (currency == 'WRC')
+            return 'WarCoin';
         return currency;
     }
 
@@ -103,6 +109,8 @@ module.exports = class cryptopia extends Exchange {
             return 'NET';
         if (currency == 'Bitgem')
             return 'BTG';
+        if (currency == 'FC2')
+            return 'FUEL'; // FuelCoin != FUEL
         return currency;
     }
 
@@ -268,20 +276,67 @@ module.exports = class cryptopia extends Exchange {
             'hours': 24, // default
         }, params));
         let trades = response['Data'];
-        return this.parseTrades (trades, market);
+        return this.parseTrades (trades, market, since, limit);
     }
 
     async fetchMyTrades (symbol = undefined, since = undefined, limit = undefined, params = {}) {
-        if (!symbol)
-            throw new ExchangeError (this.id + ' fetchMyTrades requires a symbol');
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let response = await this.privatePostGetTradeHistory (this.extend ({
-            // 'Market': market['id'],
-            'TradePairId': market['id'], // Cryptopia identifier (not required if 'Market' supplied)
-            // 'Count': 10, // max = 100
-        }, params));
-        return this.parseTrades (response['Data'], market);
+        let request = {};
+        let market = undefined;
+        if (symbol) {
+            market = this.market (symbol);
+            request['TradePairId'] = market['id'];
+        }
+        let response = await this.privatePostGetTradeHistory (this.extend (request, params));
+        return this.parseTrades (response['Data'], market, since, limit);
+    }
+
+    async fetchCurrencies (params = {}) {
+        let response = await this.publicGetCurrencies (params);
+        let currencies = response['Data'];
+        let result = {};
+        for (let i = 0; i < currencies.length; i++) {
+            let currency = currencies[i];
+            let id = currency['Symbol'];
+            // todo: will need to rethink the fees
+            // to add support for multiple withdrawal/deposit methods and
+            // differentiated fees for each particular method
+            let precision = 8; // default precision, todo: fix "magic constants"
+            let code = this.commonCurrencyCode (id);
+            let active = (currency['ListingStatus'] == 'Active');
+            let status = currency['Status'].toLowerCase ();
+            if (status != 'ok')
+                active = false;
+            result[code] = {
+                'id': id,
+                'code': code,
+                'info': currency,
+                'name': currency['Name'],
+                'active': active,
+                'status': status,
+                'fee': currency['WithdrawFee'],
+                'precision': precision,
+                'limits': {
+                    'amount': {
+                        'min': currency['MinBaseTrade'],
+                        'max': Math.pow (10, precision),
+                    },
+                    'price': {
+                        'min': Math.pow (10, -precision),
+                        'max': Math.pow (10, precision),
+                    },
+                    'cost': {
+                        'min': undefined,
+                        'max': undefined,
+                    },
+                    'withdraw': {
+                        'min': currency['MinWithdraw'],
+                        'max': currency['MaxWithdraw'],
+                    },
+                },
+            };
+        }
+        return result;
     }
 
     async fetchBalance (params = {}) {
@@ -305,6 +360,8 @@ module.exports = class cryptopia extends Exchange {
     }
 
     async createOrder (symbol, type, side, amount, price = undefined, params = {}) {
+        if (type == 'market')
+            throw new ExchangeError (this.id + ' allows limit orders only');
         await this.loadMarkets ();
         let market = this.market (symbol);
         price = parseFloat (price);
@@ -453,7 +510,7 @@ module.exports = class cryptopia extends Exchange {
             if (order['symbol'] == symbol)
                 result.push (order);
         }
-        return result;
+        return this.filterBySinceLimit (result, since, limit);
     }
 
     async fetchOrder (id, symbol = undefined, params = {}) {
